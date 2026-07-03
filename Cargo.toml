@@ -1,0 +1,34 @@
+[package]
+name = "pawnstar"
+version = "0.13.0"
+edition = "2021"
+description = "Pawnstar UCI chess engine — mechanical Rust port of the C++ original"
+license = "MIT"
+
+[features]
+# Mirrors the C++ DEBUGX flag: diagnostic counters compiled in by default,
+# disabled for release builds with --no-default-features (the C++ RELEASE=1).
+default = ["debugx"]
+debugx = []
+
+[lib]
+name = "pawnstar"
+path = "src/lib.rs"
+
+[[bin]]
+name = "pawnstar"
+path = "src/main.rs"
+
+[profile.dev]
+# Search/perft are unusable at -O0; keep overflow checks to catch missed wrapping ops.
+opt-level = 3
+overflow-checks = true
+debug-assertions = true
+
+[profile.release]
+opt-level = 3
+overflow-checks = false
+codegen-units = 1
+
+[profile.test]
+inherits = "dev"
