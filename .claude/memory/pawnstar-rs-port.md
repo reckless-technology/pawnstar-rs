@@ -28,3 +28,8 @@ per-position bench signature.
 - Rust ~8% slower than C++ on M1 (1.02M vs 1.11M nps) after the P8 perf pass; the big win was
   i32 (not i64) accumulation in the int8 eval dot so LLVM vectorizes it (provably identical,
   bounded ≤66M).
+- The Go port (../pawnstar-go, v0.1.178) is ALSO bit-exact (same 6,888,983-node bench). 2026-07-03
+  round-robin at 10+0.1 (300 games/pairing, UHO openings, Threads=1/Hash=64/books off): C++ vs
+  Go −5.8±23.9, C++ vs Rust 0.0±25.1 (exact 150/300 tie), Go vs Rust +26.7±25.4. Least-squares
+  (C++=0): Go +13, Rust −7 — all three within noise of each other, as bit-identical searches
+  should be; only Go>Rust grazed 95% significance.
