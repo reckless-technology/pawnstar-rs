@@ -1,1 +1,2 @@
 - [pawnstar-rs port](pawnstar-rs-port.md) — bit-exact Rust port in ../pawnstar-rs; parity recipe + re-bless rules
+- [pawnstar-go port](pawnstar-go-port.md) — bit-exact Go port in ../pawnstar-go; binary/options + tournament evidence

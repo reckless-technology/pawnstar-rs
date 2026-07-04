@@ -1,7 +1,10 @@
 # Pawnstar (Rust)
 
-A mechanical Rust port of the [Pawnstar](../pawnstar) UCI chess engine (C++23): bitboard board
-representation, Lazy SMP alpha-beta search, NNUE-only evaluation (1024-wide, 8 king buckets).
+A mechanical Rust port of the [Pawnstar](https://github.com/jonny-reckless/pawnstar) UCI chess
+engine (C++23): bitboard board representation, Lazy SMP alpha-beta search, NNUE-only evaluation
+(1024-wide, 8 king buckets). A sibling
+[Go port](https://github.com/jonny-reckless/pawnstar-go) exists too; all three engines are
+bit-exact with one another.
 
 **Bit-exact with the C++ original.** At fixed depth, single-threaded, this port produces the exact
 same search: `bench` = **6,888,983 nodes** at depth 13, with per-position node counts, best moves,
@@ -12,7 +15,7 @@ transcript diff at depths 8–13; locked in by `tests/bench_golden_test.rs`).
 
 ```bash
 cargo build --release          # engine → target/release/pawnstar (net + book embedded)
-cargo test --release           # all eight ported suites (perft, SEE, NNUE ×2, BK, book, clock, golden)
+cargo test --release           # all ten suites: the eight C++ suites (incl. uci_test.sh) + two Rust-only gates
 bash test/uci_test.sh target/release/pawnstar   # UCI integration suite (needs bash ≥ 4 for coproc)
 cargo run --release --bin stamp_net -- <raw.bin> <stamped.bin>   # stamp a raw bullet net
 cargo run --release --bin dump_magics                            # regenerate the magic constants
@@ -105,7 +108,10 @@ runs scalar on arm64, where this port was verified). Measured single-threaded on
 | perft suite (raw movegen Mnps) | 436 | 255 | 0.58× |
 
 Real search speed is within ~10% of the C++ (the search is eval-bound and the eval kernels
-vectorize). The perft gap is confined to raw move generation (`gen_moves`: per-element bounds
+vectorize). Head-to-head at 10+0.1 (300 games, UHO openings, single-threaded): **an exact 150–150
+tie with the C++** (81 wins each, 138 draws; 0.0 ± 25.1 Elo) — a three-way round-robin with the Go
+port put all three engines within the error bars of one another (least-squares, C++ = 0: Go +13,
+Rust −7). The perft gap is confined to raw move generation (`gen_moves`: per-element bounds
 checks and indirect attack-fn calls that clang folds harder); movegen is only ~1–2% of a search
 node's cost, so it barely registers in play. Future work: x86-64 AVX2/VNNI output-dot kernels
 (`std::arch` + the ported cpuid gate in `platform.rs`), untested here for lack of x86 hardware —
