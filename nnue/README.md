@@ -9,7 +9,7 @@ and produce bit-identical evaluations from it.
 **This file is a shared asset, not a Rust artifact.** Everything about producing a net — the
 bullet trainer setup, data pipeline, quantisation, verification, SPRT testing, and the full
 net-shipping checklist — lives in the C++ repository (`nnue/README.md` §6–7 and
-`nnue/int8_quant_study.md` in [pawnstar](../../pawnstar), the reference implementation). Nets are
+`nnue/int8_quant_study.md` in [pawnstar](https://github.com/jonny-reckless/pawnstar), the reference implementation). Nets are
 trained once and shipped to both engines.
 
 ## Shipping a new net to this repo
