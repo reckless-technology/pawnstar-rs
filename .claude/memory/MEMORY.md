@@ -1,0 +1,1 @@
+- [pawnstar-rs port](pawnstar-rs-port.md) — bit-exact Rust port in ../pawnstar-rs; parity recipe + re-bless rules
