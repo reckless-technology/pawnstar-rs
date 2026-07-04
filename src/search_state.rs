@@ -235,14 +235,14 @@ impl<'a> SearchState<'a> {
         const KILLER_BASE: i32 = 1 << 19; // 524,288: killers sit just below winning captures
         const COUNTERMOVE_SCORE: i32 = KILLER_BASE - 1; // countermove: just below the two killers
         const MAX_QUIET: i32 = KILLER_BASE - 2; // history scores clamp just below the countermove
-        let position = *self.current_position();
+        let position = self.current_position();
         let killer0 = self.killers[ply as usize][0];
         let killer1 = self.killers[ply as usize][1];
         for mv in moves.as_mut_slice() {
             let sort: i32;
             if !mv.is_quiet() {
                 // capture or promotion: order by static exchange evaluation
-                let (see, is_checking) = evaluate_static_exchange(&position, *mv);
+                let (see, is_checking) = evaluate_static_exchange(position, *mv);
                 if is_checking {
                     mv.gives_check();
                 }
@@ -910,7 +910,6 @@ pub fn evaluate_position(state: &mut SearchState) -> i32 {
     {
         return DRAW_SCORE;
     }
-    let position = *state.current_position();
     // Memoise the (net-specific) NNUE eval by Zobrist hash: a cache hit skips the forward pass.
     // The accumulator is maintained incrementally by SearchState make/undo; the cache only saves
     // the dot-product. The cache is cleared whenever the net changes (SetPosition / EvalFile load).
@@ -918,13 +917,16 @@ pub fn evaluate_position(state: &mut SearchState) -> i32 {
     // The cached value is the RAW, clock-independent NNUE eval: the Zobrist hash excludes the
     // fifty-move clock, so the same position can be probed at different clock values. The
     // fifty-move scaling is therefore applied AFTER the cache, on the way out — never stored.
-    let hash = position.hash;
+    let (hash, reversible_move_count, color_to_move) = {
+        let p = state.current_position();
+        (p.hash, p.reversible_move_count, p.color_to_move)
+    };
     if let Some(raw) = state.game.eval_cache.probe(hash) {
         increment!("eval hash hits");
-        return scale_by_rule50(raw, position.reversible_move_count as i32);
+        return scale_by_rule50(raw, reversible_move_count as i32);
     }
     let game = state.game; // copy the shared reference out so the accumulator borrow below is independent
-    let raw = game.nnue_network.evaluate(state.current_accumulator(), position.color_to_move);
+    let raw = game.nnue_network.evaluate(state.current_accumulator(), color_to_move);
     game.eval_cache.store(hash, raw);
-    scale_by_rule50(raw, position.reversible_move_count as i32)
+    scale_by_rule50(raw, reversible_move_count as i32)
 }

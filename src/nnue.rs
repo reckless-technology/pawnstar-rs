@@ -132,7 +132,7 @@ pub fn screlu(x: i16) -> i32 {
 
 /// Add a feature column to a single-perspective accumulator.
 #[inline(always)]
-fn add_column(acc: &mut [i16; HIDDEN_SIZE], column: &[i16]) {
+fn add_column(acc: &mut [i16; HIDDEN_SIZE], column: &[i16; HIDDEN_SIZE]) {
     for i in 0..HIDDEN_SIZE {
         acc[i] = acc[i].wrapping_add(column[i]);
     }
@@ -140,7 +140,7 @@ fn add_column(acc: &mut [i16; HIDDEN_SIZE], column: &[i16]) {
 
 /// Subtract a feature column from a single-perspective accumulator (the inverse of add_column).
 #[inline(always)]
-fn sub_column(acc: &mut [i16; HIDDEN_SIZE], column: &[i16]) {
+fn sub_column(acc: &mut [i16; HIDDEN_SIZE], column: &[i16; HIDDEN_SIZE]) {
     for i in 0..HIDDEN_SIZE {
         acc[i] = acc[i].wrapping_sub(column[i]);
     }
@@ -246,6 +246,13 @@ impl Default for Network {
 }
 
 impl Network {
+    /// The feature column at element offset `r`, as a fixed-size array reference (so the
+    /// accumulator add/sub loops vectorize without per-element bounds checks).
+    #[inline(always)]
+    fn column(&self, r: usize) -> &[i16; HIDDEN_SIZE] {
+        (&self.feature_weights.0[r..r + HIDDEN_SIZE]).try_into().unwrap()
+    }
+
     /// Construct an unloaded network (weights zeroed; the C++ leaves them uninitialised).
     pub fn new() -> Network {
         // One heap allocation for the 12.6 MB FT bank, zero-initialised without a stack transit.
@@ -386,7 +393,7 @@ impl Network {
             for piece in Piece::ALL {
                 for s in position.pieces[piece.index()] & friendly {
                     let r = row(bucket, color.index(), piece.index(), s.index(), black);
-                    add_column(side, &self.feature_weights.0[r..r + HIDDEN_SIZE]);
+                    add_column(side, self.column(r));
                 }
             }
         }
@@ -401,11 +408,11 @@ impl Network {
                 let to_bb = to.pieces[piece.index()] & to.colors[color.index()];
                 for s in from_bb & !to_bb {
                     let r = row(bucket, color.index(), piece.index(), s.index(), black);
-                    sub_column(side, &self.feature_weights.0[r..r + HIDDEN_SIZE]);
+                    sub_column(side, self.column(r));
                 }
                 for s in to_bb & !from_bb {
                     let r = row(bucket, color.index(), piece.index(), s.index(), black);
-                    add_column(side, &self.feature_weights.0[r..r + HIDDEN_SIZE]);
+                    add_column(side, self.column(r));
                 }
             }
         }
@@ -457,16 +464,16 @@ impl Network {
                 for s in from_bb & !to_bb {
                     let piece = from.squares[s.index()].index();
                     let rw = row(wt, color.index(), piece, s.index(), false);
-                    sub_column(&mut acc.white, &self.feature_weights.0[rw..rw + HIDDEN_SIZE]);
+                    sub_column(&mut acc.white, self.column(rw));
                     let rb = row(bt, color.index(), piece, s.index(), true);
-                    sub_column(&mut acc.black, &self.feature_weights.0[rb..rb + HIDDEN_SIZE]);
+                    sub_column(&mut acc.black, self.column(rb));
                 }
                 for s in to_bb & !from_bb {
                     let piece = to.squares[s.index()].index();
                     let rw = row(wt, color.index(), piece, s.index(), false);
-                    add_column(&mut acc.white, &self.feature_weights.0[rw..rw + HIDDEN_SIZE]);
+                    add_column(&mut acc.white, self.column(rw));
                     let rb = row(bt, color.index(), piece, s.index(), true);
-                    add_column(&mut acc.black, &self.feature_weights.0[rb..rb + HIDDEN_SIZE]);
+                    add_column(&mut acc.black, self.column(rb));
                 }
             }
             return;
@@ -503,12 +510,17 @@ impl Network {
             if a > 255 { 255 } else { a }
         }
 
-        let mut dot8: i64 = 0;
+        // Accumulate in i32: |dot8| <= 2 * HIDDEN_SIZE * 255 * 127 ≈ 66M << 2^31, so this is
+        // bit-identical to the C++ scalar's int64 accumulation (and matches its AVX2 kernel,
+        // which also accumulates in int32) while letting LLVM vectorize the loop.
+        let w_stm: &[i8; HIDDEN_SIZE] = (&self.output_weights_i8[..HIDDEN_SIZE]).try_into().unwrap();
+        let w_ntm: &[i8; HIDDEN_SIZE] = (&self.output_weights_i8[HIDDEN_SIZE..]).try_into().unwrap();
+        let mut dot8: i32 = 0;
         for i in 0..HIDDEN_SIZE {
-            dot8 += u8_act(stm_acc[i]) as i64 * self.output_weights_i8[i] as i64;
-            dot8 += u8_act(ntm_acc[i]) as i64 * self.output_weights_i8[HIDDEN_SIZE + i] as i64;
+            dot8 += u8_act(stm_acc[i]) * w_stm[i] as i32;
+            dot8 += u8_act(ntm_acc[i]) * w_ntm[i] as i32;
         }
-        let output = dot8 * self.output_w_scale as i64 * (1i64 << INT8_SHIFT);
+        let output = dot8 as i64 * self.output_w_scale as i64 * (1i64 << INT8_SHIFT);
         dequant(output, self.output_bias)
     }
 
