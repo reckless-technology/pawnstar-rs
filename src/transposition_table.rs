@@ -28,7 +28,13 @@ impl Transposition {
 
     /// Construct an entry packing score/depth/node-type into the move's spare bits.
     #[inline(always)]
-    pub const fn with_data(hash: ZobristT, mv: Move, score: i32, depth: i32, type_: NodeType) -> Transposition {
+    pub const fn with_data(
+        hash: ZobristT,
+        mv: Move,
+        score: i32,
+        depth: i32,
+        type_: NodeType,
+    ) -> Transposition {
         Transposition {
             hash,
             mv: mv.with_tt_data(score, depth, type_),
@@ -145,7 +151,9 @@ impl TranspositionTable {
         {
             // No stable prefetch intrinsic on aarch64; a plain relaxed load of the key word warms
             // the line equivalently for this result-neutral hint.
-            let _ = self.table[(hash as usize) & self.mask].key.load(Ordering::Relaxed);
+            let _ = self.table[(hash as usize) & self.mask]
+                .key
+                .load(Ordering::Relaxed);
         }
         #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
         {
@@ -176,7 +184,11 @@ impl TranspositionTable {
         let generation = self.generation.load(Ordering::Relaxed);
         let is_empty = cur_key == 0 && cur_data == 0;
         let is_old = cur.tt_age() != generation;
-        if is_empty || is_old || cur.tt_depth() <= transposition.depth() || transposition.node_type() == NodeType::Pv {
+        if is_empty
+            || is_old
+            || cur.tt_depth() <= transposition.depth()
+            || transposition.node_type() == NodeType::Pv
+        {
             let mut m = transposition.mv;
             m.set_tt_age(generation);
             let data = m.bits();

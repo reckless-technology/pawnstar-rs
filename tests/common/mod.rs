@@ -24,6 +24,10 @@ pub fn check(passed: bool, summary: &str) -> bool {
 /// (the C++ returns the process exit code; the cargo test asserts this is 0).
 pub fn summary(detail: &str) -> i32 {
     let failures = FAILURES.load(Ordering::Relaxed);
-    println!("{} {}", if failures == 0 { "[PASS]" } else { "[FAIL]" }, detail);
+    println!(
+        "{} {}",
+        if failures == 0 { "[PASS]" } else { "[FAIL]" },
+        detail
+    );
     failures
 }

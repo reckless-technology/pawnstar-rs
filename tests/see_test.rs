@@ -6,15 +6,17 @@ use pawnstar::constants::Piece;
 use pawnstar::moves::{Move, MoveList};
 use pawnstar::position::Position;
 use pawnstar::square::Square;
-use pawnstar::static_exchange_evaluation::{evaluate_static_exchange, evaluate_static_exchange_reference};
+use pawnstar::static_exchange_evaluation::{
+    evaluate_static_exchange, evaluate_static_exchange_reference,
+};
 
 /// A single static-exchange-evaluation test case.
 struct SeeTest {
-    name: &'static str,   // Human-readable case name.
-    fen: &'static str,    // Position FEN.
-    mv: Move,             // Move to evaluate.
-    want_score: i32,      // Expected SEE score.
-    want_checking: bool,  // Expected give-check flag.
+    name: &'static str,  // Human-readable case name.
+    fen: &'static str,   // Position FEN.
+    mv: Move,            // Move to evaluate.
+    want_score: i32,     // Expected SEE score.
+    want_checking: bool, // Expected give-check flag.
 }
 
 fn sq(name: &str) -> Square {
@@ -258,7 +260,12 @@ fn see_suite() {
     let mut see_checks: i64 = 0;
     let mut see_mismatches: i64 = 0;
     for fen in CROSS_CHECK_FENS {
-        cross_check_see(&Position::from_string(fen), 3, &mut see_checks, &mut see_mismatches);
+        cross_check_see(
+            &Position::from_string(fen),
+            3,
+            &mut see_checks,
+            &mut see_mismatches,
+        );
     }
     common::check(
         see_mismatches == 0,
@@ -278,7 +285,10 @@ fn see_suite() {
                 println!("       score: got {} want {}", score, tc.want_score);
             }
             if is_checking != tc.want_checking {
-                println!("       givesCheck: got {} want {}", is_checking, tc.want_checking);
+                println!(
+                    "       givesCheck: got {} want {}",
+                    is_checking, tc.want_checking
+                );
             }
         }
     }

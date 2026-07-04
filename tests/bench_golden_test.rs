@@ -39,8 +39,9 @@ const GOLDEN_TOTAL: u64 = 6_888_983;
 
 #[test]
 fn bench_matches_cpp_golden_signature() {
-    let net_path = std::env::var("PAWNSTAR_EVALFILE")
-        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/nnue/pawnstar-v12.bin").to_string());
+    let net_path = std::env::var("PAWNSTAR_EVALFILE").unwrap_or_else(|_| {
+        concat!(env!("CARGO_MANIFEST_DIR"), "/nnue/pawnstar-v12.bin").to_string()
+    });
     if !std::path::Path::new(&net_path).exists() {
         common::summary("BENCH GOLDEN: skipped (no net supplied)");
         return;

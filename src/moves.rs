@@ -287,7 +287,13 @@ impl Move {
     /// promotion (bit-identical to the C++ 3-argument `Promotion` overload).
     #[inline(always)]
     pub const fn promotion(from: Square, to: Square, promoted: Piece, captured: Piece) -> Move {
-        Move::new_typed_capture(from, to, Piece::Pawn, MoveType::from_u8(promoted as u8), captured)
+        Move::new_typed_capture(
+            from,
+            to,
+            Piece::Pawn,
+            MoveType::from_u8(promoted as u8),
+            captured,
+        )
     }
 
     /// Create a castling move (king from/to squares).
@@ -321,7 +327,9 @@ impl Move {
     #[inline(always)]
     const fn new(from: Square, to: Square, piece: Piece) -> Move {
         Move {
-            val: to.0 as i64 | ((from.0 as i64) << FROM_SHIFT) | ((piece as u8 as i64) << PIECE_SHIFT),
+            val: to.0 as i64
+                | ((from.0 as i64) << FROM_SHIFT)
+                | ((piece as u8 as i64) << PIECE_SHIFT),
         }
     }
 
@@ -338,7 +346,13 @@ impl Move {
 
     /// Construct a typed capture move.
     #[inline(always)]
-    const fn new_typed_capture(from: Square, to: Square, piece: Piece, type_: MoveType, captured: Piece) -> Move {
+    const fn new_typed_capture(
+        from: Square,
+        to: Square,
+        piece: Piece,
+        type_: MoveType,
+        captured: Piece,
+    ) -> Move {
         Move {
             val: to.0 as i64
                 | ((from.0 as i64) << FROM_SHIFT)

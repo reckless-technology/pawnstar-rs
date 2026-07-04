@@ -15,7 +15,7 @@ use crate::{increment, increment_if, uci_println};
 /// Compact position hash entry for draw-by-repetition detection.
 #[derive(Clone, Copy)]
 pub struct HashEntry {
-    pub hash: ZobristT,           // Zobrist hash of the position.
+    pub hash: ZobristT,            // Zobrist hash of the position.
     pub reversible_move_count: u8, // Half-move clock at this position.
 }
 
@@ -39,12 +39,12 @@ pub type KillerArray = [[Move; 2]; MAX_PLY];
 /// cache-line contention on its hot counters.
 pub struct SearchState<'a> {
     // State variables
-    pub game: &'a Game,                    // Shared state: TT, clock, cancellation flag.
-    pub history: HistoryTable,             // Per-thread history heuristic counts (no sharing).
-    pub killers: KillerArray,              // Killer moves indexed by ply.
-    pub node_count: u64,                   // Cumulative nodes this thread searched.
-    pub seldepth: i32,                     // Max ply reached this search (selective depth, for `info`).
-    pub positions: Vec<Position>,          // Position stack.
+    pub game: &'a Game,           // Shared state: TT, clock, cancellation flag.
+    pub history: HistoryTable,    // Per-thread history heuristic counts (no sharing).
+    pub killers: KillerArray,     // Killer moves indexed by ply.
+    pub node_count: u64,          // Cumulative nodes this thread searched.
+    pub seldepth: i32,            // Max ply reached this search (selective depth, for `info`).
+    pub positions: Vec<Position>, // Position stack.
     pub acc_stack: Vec<nnue::Accumulator>, // Per-ply NNUE accumulators (copy-make; see current_accumulator).
     pub acc_valid: Vec<bool>,              // acc_stack[i] is up to date iff acc_valid[i].
     pub hash_stack: Vec<HashEntry>,        // Draw by repetition stack.
@@ -89,7 +89,9 @@ impl<'a> SearchState<'a> {
         // Seed the per-thread position stack with only the current game position.
         // Reserve the deepest the search can descend so no push during search reallocates.
         state.positions.reserve(MAX_PLY + 4);
-        state.positions.push(*pos.last().expect("game position history is never empty"));
+        state
+            .positions
+            .push(*pos.last().expect("game position history is never empty"));
         drop(pos);
         // Seed the per-ply NNUE accumulator stack; acc_stack[0] is the root accumulator.
         state.acc_stack.reserve(MAX_PLY + 4);
@@ -123,7 +125,8 @@ impl<'a> SearchState<'a> {
     /// Move::none() maps to 0, a harmless slot.
     #[inline(always)]
     pub fn continuation_hist_score(&self, prev: Move, mv: Move) -> i32 {
-        self.continuation_history[(prev.piece_to() as usize) * CONT_KEYS + mv.piece_to() as usize] as i32
+        self.continuation_history[(prev.piece_to() as usize) * CONT_KEYS + mv.piece_to() as usize]
+            as i32
     }
 
     /// Whether `mv` is the recorded countermove (best quiet refutation) to `prev`.
@@ -137,7 +140,8 @@ impl<'a> SearchState<'a> {
     #[inline]
     pub fn record_continuation_history(&mut self, prev: Move, mv: Move) {
         if mv.is_quiet() {
-            let c = &mut self.continuation_history[(prev.piece_to() as usize) * CONT_KEYS + mv.piece_to() as usize];
+            let c = &mut self.continuation_history
+                [(prev.piece_to() as usize) * CONT_KEYS + mv.piece_to() as usize];
             if *c < 16384 {
                 *c += 1;
             }
@@ -216,7 +220,9 @@ impl<'a> SearchState<'a> {
             // copy the parent accumulator, then apply this ply's feature delta
             let (parents, tail) = self.acc_stack.split_at_mut(j);
             tail[0] = parents[j - 1];
-            self.game.nnue_network.update(&mut tail[0], &self.positions[j - 1], &self.positions[j]);
+            self.game
+                .nnue_network
+                .update(&mut tail[0], &self.positions[j - 1], &self.positions[j]);
             self.acc_valid[j] = true;
         }
         &self.acc_stack[d]
@@ -246,7 +252,11 @@ impl<'a> SearchState<'a> {
                 if is_checking {
                     mv.gives_check();
                 }
-                sort = if see >= 0 { WINNING_CAPTURE_BASE + see } else { see }; // losing captures sort below quiets
+                sort = if see >= 0 {
+                    WINNING_CAPTURE_BASE + see
+                } else {
+                    see
+                }; // losing captures sort below quiets
             } else if *mv == killer0 {
                 // first killer: just below winning captures
                 sort = KILLER_BASE + 1;
@@ -299,7 +309,9 @@ impl<'a> SearchState<'a> {
     /// Check whether this thread should abort (the shared stop flag is set).
     #[inline(always)]
     pub fn is_cancelled(&self) -> bool {
-        self.game.is_cancel_pending.load(std::sync::atomic::Ordering::Relaxed)
+        self.game
+            .is_cancel_pending
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     // ------------------------------------------------------------------------
@@ -323,7 +335,10 @@ impl<'a> SearchState<'a> {
 
         let mut child_depth = depth - 1;
         match mv.type_() {
-            MoveType::PromotionKnight | MoveType::PromotionBishop | MoveType::PromotionRook | MoveType::PromotionQueen => {
+            MoveType::PromotionKnight
+            | MoveType::PromotionBishop
+            | MoveType::PromotionRook
+            | MoveType::PromotionQueen => {
                 child_depth += 1;
                 increment!("promotion extensions");
             }
@@ -336,7 +351,9 @@ impl<'a> SearchState<'a> {
         self.play_move(mv);
         // Prefetch the child's TT cell now; the recursive search probes it after its own
         // prologue, by which time the (random-access, cache-missing) line should be resident.
-        self.game.transposition_table.prefetch(self.current_position().hash);
+        self.game
+            .transposition_table
+            .prefetch(self.current_position().hash);
         let is_checking = self.current_position().is_in_check();
         let score: i32;
         if beta > alpha + 1 && move_index > 0 && !was_in_check && !is_checking {
@@ -364,7 +381,14 @@ impl<'a> SearchState<'a> {
     /// Try null move pruning, reusing the caller's precomputed static eval.
     /// The caller has already established this is a non-PV node that is not in check.
     /// Returns the null-move score, or alpha if null move was not tried / did not cut.
-    fn attempt_null_move(&mut self, depth: i32, ply: i32, alpha: i32, beta: i32, eval_score: i32) -> i32 {
+    fn attempt_null_move(
+        &mut self,
+        depth: i32,
+        ply: i32,
+        alpha: i32,
+        beta: i32,
+        eval_score: i32,
+    ) -> i32 {
         let position = self.current_position();
         let color = position.color_to_move;
         // Only try null move pruning if all conditions are met.
@@ -405,21 +429,24 @@ impl<'a> SearchState<'a> {
     ) -> i32 {
         increment!("alpha beta calls");
         self.seldepth = self.seldepth.max(ply); // track selective depth for `info seldepth`
-        // Poll the hard deadline (and the `go nodes` limit) often — every 2048 nodes: between
-        // polls the search cannot stop, so a coarse interval lets a node-heavy batch overrun the
-        // deadline. The node limit (max_nodes, 0 = none) is checked per-thread, so it is exact at
-        // Threads=1 (the reproducible-testing case) and approximate above.
+                                                // Poll the hard deadline (and the `go nodes` limit) often — every 2048 nodes: between
+                                                // polls the search cannot stop, so a coarse interval lets a node-heavy batch overrun the
+                                                // deadline. The node limit (max_nodes, 0 = none) is checked per-thread, so it is exact at
+                                                // Threads=1 (the reproducible-testing case) and approximate above.
         self.node_count += 1;
         if (self.node_count & 0x7FF) == 0
             && (self.game.time_control.has_reached_hard_deadline()
-                || (self.game.time_control.max_nodes != 0 && self.node_count >= self.game.time_control.max_nodes))
+                || (self.game.time_control.max_nodes != 0
+                    && self.node_count >= self.game.time_control.max_nodes))
         {
             self.game
                 .is_cancel_pending
                 .store(true, std::sync::atomic::Ordering::Relaxed);
             return SEARCH_CANCELLED_SCORE;
         }
-        if self.current_position().is_draw_by_material() || self.is_draw_by_fifty_moves() || self.is_draw_by_repetition()
+        if self.current_position().is_draw_by_material()
+            || self.is_draw_by_fifty_moves()
+            || self.is_draw_by_repetition()
         {
             return DRAW_SCORE;
         }
@@ -432,7 +459,10 @@ impl<'a> SearchState<'a> {
             return evaluate_position(self);
         }
         // Determine if there is an entry in the transposition table for this position.
-        let transposition = self.game.transposition_table.find_transposition(self.current_position().hash);
+        let transposition = self
+            .game
+            .transposition_table
+            .find_transposition(self.current_position().hash);
         if let Some(t) = &transposition {
             if t.depth() >= depth {
                 match t.node_type() {
@@ -461,7 +491,11 @@ impl<'a> SearchState<'a> {
         // is weak. Rather than spend the full depth with poor ordering, reduce by one ply — the
         // shallower search still fills the TT with a best move, so the cost is recouped by better
         // ordering when this node is revisited.
-        if depth >= NO_TT_REDUCE_MIN_DEPTH && transposition.as_ref().map_or(true, |t| t.mv == Move::none()) {
+        if depth >= NO_TT_REDUCE_MIN_DEPTH
+            && transposition
+                .as_ref()
+                .map_or(true, |t| t.mv == Move::none())
+        {
             increment!("internal iterative reductions");
             depth -= 1;
         }
@@ -505,19 +539,23 @@ impl<'a> SearchState<'a> {
                 increment!("table move");
                 best_move = t.mv;
                 pv.clear(); // child writes its line here only if it is a PV node
-                let score = self.search_single_move(depth, ply, alpha, beta, t.mv, &mut pv, 0).score();
+                let score = self
+                    .search_single_move(depth, ply, alpha, beta, t.mv, &mut pv, 0)
+                    .score();
                 if self.is_cancelled() {
                     return SEARCH_CANCELLED_SCORE;
                 }
                 if score >= beta {
                     increment!("table move beta cutoffs");
-                    self.game.transposition_table.record_transposition(&Transposition::with_data(
-                        self.current_position().hash,
-                        t.mv,
-                        score,
-                        depth,
-                        NodeType::Cut,
-                    ));
+                    self.game
+                        .transposition_table
+                        .record_transposition(&Transposition::with_data(
+                            self.current_position().hash,
+                            t.mv,
+                            score,
+                            depth,
+                            NodeType::Cut,
+                        ));
                     let color = self.current_position().color_to_move;
                     self.history.record_good_move(color, t.mv);
                     self.record_continuation_history(prev_move, t.mv);
@@ -608,13 +646,15 @@ impl<'a> SearchState<'a> {
             }
             if score >= beta {
                 increment!("beta cutoffs");
-                self.game.transposition_table.record_transposition(&Transposition::with_data(
-                    self.current_position().hash,
-                    mv,
-                    score,
-                    depth,
-                    NodeType::Cut,
-                ));
+                self.game
+                    .transposition_table
+                    .record_transposition(&Transposition::with_data(
+                        self.current_position().hash,
+                        mv,
+                        score,
+                        depth,
+                        NodeType::Cut,
+                    ));
                 let color = self.current_position().color_to_move;
                 self.history.record_good_move(color, mv);
                 self.record_continuation_history(prev_move, mv);
@@ -644,13 +684,15 @@ impl<'a> SearchState<'a> {
         if has_raised_alpha {
             // Raised alpha without a cutoff: PV node.
             increment!("pv nodes");
-            self.game.transposition_table.record_transposition(&Transposition::with_data(
-                self.current_position().hash,
-                best_move,
-                alpha,
-                depth,
-                NodeType::Pv,
-            ));
+            self.game
+                .transposition_table
+                .record_transposition(&Transposition::with_data(
+                    self.current_position().hash,
+                    best_move,
+                    alpha,
+                    depth,
+                    NodeType::Pv,
+                ));
             let color = self.current_position().color_to_move;
             self.history.record_good_move(color, best_move);
             self.record_continuation_history(prev_move, best_move);
@@ -658,13 +700,15 @@ impl<'a> SearchState<'a> {
         } else {
             // Searched all moves without raising alpha: all-node.
             increment!("all nodes");
-            self.game.transposition_table.record_transposition(&Transposition::with_data(
-                self.current_position().hash,
-                best_move,
-                best_score,
-                depth,
-                NodeType::All,
-            ));
+            self.game
+                .transposition_table
+                .record_transposition(&Transposition::with_data(
+                    self.current_position().hash,
+                    best_move,
+                    best_score,
+                    depth,
+                    NodeType::All,
+                ));
         }
         best_score
     }
@@ -737,12 +781,17 @@ impl<'a> SearchState<'a> {
     /// authoritative move. `move_list` is this thread's copy of the root move list (re-sorted per
     /// iteration); `best_move` is the seed from the shallow ordering pass; `thread_id` drives the
     /// iteration-skip schedule.
-    pub fn iterative_deepen(&mut self, mut move_list: MoveList, mut best_move: Move, thread_id: i32) -> Move {
+    pub fn iterative_deepen(
+        &mut self,
+        mut move_list: MoveList,
+        mut best_move: Move,
+        thread_id: i32,
+    ) -> Move {
         let is_main = thread_id == 0; // thread 0 is the authoritative main thread
-        // Per-thread iteration-skip schedule (Stockfish-style): helper threads skip certain
-        // iteration depths so their searches desynchronize from the main thread and from each
-        // other, prefilling the shared TT with diverse entries instead of recomputing the same
-        // tree in lockstep. The main thread never skips.
+                                      // Per-thread iteration-skip schedule (Stockfish-style): helper threads skip certain
+                                      // iteration depths so their searches desynchronize from the main thread and from each
+                                      // other, prefilling the shared TT with diverse entries instead of recomputing the same
+                                      // tree in lockstep. The main thread never skips.
         const SKIP_SIZE: [i32; 20] = [1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4];
         const SKIP_PHASE: [i32; 20] = [0, 1, 0, 1, 2, 3, 0, 1, 2, 3, 4, 5, 0, 1, 2, 3, 4, 5, 6, 7];
         const SKIP_ENTRIES: i32 = SKIP_SIZE.len() as i32;
@@ -753,7 +802,9 @@ impl<'a> SearchState<'a> {
 
         let mut depth = START_DEPTH + 1;
         while depth != MAX_PLY as i32 {
-            if self.game.time_control.clock_type == ClockType::FixedDepth && depth > self.game.time_control.depth {
+            if self.game.time_control.clock_type == ClockType::FixedDepth
+                && depth > self.game.time_control.depth
+            {
                 break;
             }
             if !is_main {
@@ -802,7 +853,9 @@ impl<'a> SearchState<'a> {
                         } else {
                             Move::none()
                         };
-                        self.game.ponder_move.store(ponder.bits(), std::sync::atomic::Ordering::Relaxed);
+                        self.game
+                            .ponder_move
+                            .store(ponder.bits(), std::sync::atomic::Ordering::Relaxed);
                         let mut pv_string = String::new();
                         for m in &principal_variation {
                             pv_string.push_str(&m.to_string());
@@ -845,7 +898,10 @@ impl<'a> SearchState<'a> {
             // ponderhit moment.
             if is_main
                 && self.game.time_control.clock_type == ClockType::Standard
-                && !self.game.is_pondering.load(std::sync::atomic::Ordering::Relaxed)
+                && !self
+                    .game
+                    .is_pondering
+                    .load(std::sync::atomic::Ordering::Relaxed)
             {
                 let allocated = self.game.time_control.allocated_time();
                 let elapsed = self.game.time_control.elapsed_since_search_start();
@@ -854,13 +910,19 @@ impl<'a> SearchState<'a> {
                     .iter()
                     .all(|m| (m.score() - best_move.score()).abs() <= SCORE_INSTABILITY_THRESHOLD);
                 if (is_best_move_consistent && is_score_stable) && (elapsed * 4) > allocated {
-                    uci_println!("info string Best move consistent AND score stable - search terminated.");
+                    uci_println!(
+                        "info string Best move consistent AND score stable - search terminated."
+                    );
                     break;
                 }
                 if (is_best_move_consistent || is_score_stable) && (elapsed * 2) > allocated {
                     uci_println!(
                         "info string {} - search terminated.",
-                        if is_best_move_consistent { "Best move consistent" } else { "Score stable" }
+                        if is_best_move_consistent {
+                            "Best move consistent"
+                        } else {
+                            "Score stable"
+                        }
                     );
                     break;
                 }
@@ -906,7 +968,9 @@ pub fn scale_by_rule50(score: i32, rule50: i32) -> i32 {
 /// same lazily-updated state as `&mut`.)
 pub fn evaluate_position(state: &mut SearchState) -> i32 {
     increment!("eval calls");
-    if state.current_position().is_draw_by_material() || state.is_draw_by_fifty_moves() || state.is_draw_by_repetition()
+    if state.current_position().is_draw_by_material()
+        || state.is_draw_by_fifty_moves()
+        || state.is_draw_by_repetition()
     {
         return DRAW_SCORE;
     }
@@ -926,7 +990,9 @@ pub fn evaluate_position(state: &mut SearchState) -> i32 {
         return scale_by_rule50(raw, reversible_move_count as i32);
     }
     let game = state.game; // copy the shared reference out so the accumulator borrow below is independent
-    let raw = game.nnue_network.evaluate(state.current_accumulator(), color_to_move);
+    let raw = game
+        .nnue_network
+        .evaluate(state.current_accumulator(), color_to_move);
     game.eval_cache.store(hash, raw);
     scale_by_rule50(raw, reversible_move_count as i32)
 }

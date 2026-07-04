@@ -23,12 +23,24 @@ fn chess_clock_suite() {
     {
         let clock = ChessClock::new();
         clock.start_search(/*allocated=*/ 100, /*maximum=*/ 500);
-        check(!clock.has_reached_hard_deadline(), "deadline not reached immediately after StartSearch");
-        check(clock.allocated_time() == 100, "AllocatedTime returns the soft budget");
+        check(
+            !clock.has_reached_hard_deadline(),
+            "deadline not reached immediately after StartSearch",
+        );
+        check(
+            clock.allocated_time() == 100,
+            "AllocatedTime returns the soft budget",
+        );
         sleep(100);
-        check(!clock.has_reached_hard_deadline(), "deadline not reached before the maximum elapses");
+        check(
+            !clock.has_reached_hard_deadline(),
+            "deadline not reached before the maximum elapses",
+        );
         sleep(600); // total ~700ms > 500ms maximum
-        check(clock.has_reached_hard_deadline(), "deadline reached after the maximum elapses");
+        check(
+            clock.has_reached_hard_deadline(),
+            "deadline reached after the maximum elapses",
+        );
     }
 
     // 2. A non-positive maximum means "no hard deadline" (fixed-depth / infinite): never reached.
@@ -47,7 +59,10 @@ fn chess_clock_suite() {
         let clock = ChessClock::new();
         clock.start_search(/*allocated=*/ 1000, /*maximum=*/ 1000);
         sleep(80);
-        check(clock.elapsed_since_search_start() >= 70, "elapsed >= time slept since StartSearch");
+        check(
+            clock.elapsed_since_search_start() >= 70,
+            "elapsed >= time slept since StartSearch",
+        );
     }
 
     // 4. A ponder search has NO hard deadline until ponderhit; ponderhit then arms it from that
@@ -56,12 +71,24 @@ fn chess_clock_suite() {
         let clock = ChessClock::new();
         clock.start_ponder_search(/*allocated=*/ 100, /*maximum=*/ 200);
         sleep(260); // longer than the maximum: a real deadline would have fired
-        check(!clock.has_reached_hard_deadline(), "ponder search has no deadline before ponderhit");
-        check(clock.elapsed_since_search_start() >= 250, "ponder elapsed accumulates before ponderhit");
+        check(
+            !clock.has_reached_hard_deadline(),
+            "ponder search has no deadline before ponderhit",
+        );
+        check(
+            clock.elapsed_since_search_start() >= 250,
+            "ponder elapsed accumulates before ponderhit",
+        );
 
         clock.on_ponderhit();
-        check(!clock.has_reached_hard_deadline(), "no deadline immediately after ponderhit");
-        check(clock.elapsed_since_search_start() < 100, "ponderhit resets the elapsed origin");
+        check(
+            !clock.has_reached_hard_deadline(),
+            "no deadline immediately after ponderhit",
+        );
+        check(
+            clock.elapsed_since_search_start() < 100,
+            "ponderhit resets the elapsed origin",
+        );
         sleep(280); // > 200ms maximum, measured from ponderhit
         check(
             clock.has_reached_hard_deadline(),
@@ -74,11 +101,23 @@ fn chess_clock_suite() {
         let mut clock = ChessClock::new();
         clock.start_search(/*allocated=*/ 10, /*maximum=*/ 10);
         sleep(40);
-        check(clock.has_reached_hard_deadline(), "deadline reached before Reset");
+        check(
+            clock.has_reached_hard_deadline(),
+            "deadline reached before Reset",
+        );
         clock.reset();
-        check(!clock.has_reached_hard_deadline(), "Reset clears the hard deadline");
-        check(clock.clock_type == ClockType::Standard, "Reset restores kStandard clock type");
-        check(clock.remaining_time == 5 * 60 * 1000, "Reset restores the default remaining time");
+        check(
+            !clock.has_reached_hard_deadline(),
+            "Reset clears the hard deadline",
+        );
+        check(
+            clock.clock_type == ClockType::Standard,
+            "Reset restores kStandard clock type",
+        );
+        check(
+            clock.remaining_time == 5 * 60 * 1000,
+            "Reset restores the default remaining time",
+        );
         check(
             clock.moves_to_go == 0 && clock.depth == 10,
             "Reset restores default moves_to_go / depth",

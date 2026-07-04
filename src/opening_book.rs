@@ -44,7 +44,7 @@ impl BookPrng {
 /// still parsed, but which the engine will never itself select. Questionable moves are kept in a
 /// separate map for display only; get_move never returns them.
 pub struct OpeningBook {
-    book: BTreeMap<ZobristT, Vec<Move>>,         // Map of position hash to playable moves (with repeats).
+    book: BTreeMap<ZobristT, Vec<Move>>, // Map of position hash to playable moves (with repeats).
     questionable: BTreeMap<ZobristT, Vec<Move>>, // Recognised-but-never-played '?' moves (display only).
     prng: Mutex<BookPrng>,                       // PRNG used to randomly select among book moves.
 }
@@ -111,7 +111,11 @@ impl OpeningBook {
                 *q_counts.entry(mv).or_insert(0) += 1;
             }
             for (mv, freq) in &q_counts {
-                println!("{:<8} {:3}  (questionable, never played)", mv.to_string() + "?", freq);
+                println!(
+                    "{:<8} {:3}  (questionable, never played)",
+                    mv.to_string() + "?",
+                    freq
+                );
             }
         }
     }
@@ -121,7 +125,8 @@ impl OpeningBook {
     /// "f2f4?") is *questionable*: it is replayed so the rest of the line still parses, but
     /// recorded in `questionable` rather than `book`, so get_move never returns it.
     fn parse_line_of_play(&mut self, line: &str) -> bool {
-        let mut position = Position::from_string("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+        let mut position =
+            Position::from_string("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
         for token in line.split_whitespace() {
             let mut move_string = token;
             if move_string.is_empty() || move_string.as_bytes()[0].is_ascii_digit() {
@@ -139,7 +144,11 @@ impl OpeningBook {
             let moves = position.generate_legal_moves();
             let found = moves.iter().find(|m| m.to_string() == move_string).copied();
             if let Some(mv) = found {
-                let map = if questionable { &mut self.questionable } else { &mut self.book };
+                let map = if questionable {
+                    &mut self.questionable
+                } else {
+                    &mut self.book
+                };
                 map.entry(hash).or_default().push(mv);
                 position = position.make_move(mv);
             } else {

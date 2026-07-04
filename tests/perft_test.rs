@@ -173,11 +173,17 @@ fn parse_epd(max_depth: i32) -> Vec<PerftCase> {
             if token.len() < 3 || !token.starts_with('D') {
                 continue;
             }
-            let Some((d, n)) = token[1..].split_once(' ') else { continue };
+            let Some((d, n)) = token[1..].split_once(' ') else {
+                continue;
+            };
             let depth: i32 = d.parse().unwrap_or(0);
             let nodes: u64 = n.parse().unwrap_or(0);
             if depth <= max_depth {
-                cases.push(PerftCase { fen: fen.to_string(), depth, nodes });
+                cases.push(PerftCase {
+                    fen: fen.to_string(),
+                    depth,
+                    nodes,
+                });
             }
         }
     }

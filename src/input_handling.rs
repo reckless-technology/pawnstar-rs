@@ -21,9 +21,9 @@ pub type HandlerFn = fn(&mut Engine, &[String]);
 
 /// A handler for an input command.
 pub struct Handler {
-    pub function: HandlerFn,          // Function to be called
-    pub name: &'static str,           // Command name
-    pub description: &'static str,    // Command description
+    pub function: HandlerFn,       // Function to be called
+    pub name: &'static str,        // Command name
+    pub description: &'static str, // Command description
 }
 
 /// Handle the "bookmoves" command: display book moves for the current position.
@@ -55,7 +55,11 @@ fn handle_nnue(engine: &mut Engine, _args: &[String]) {
         uci_println!("info string NNUE: no net loaded (use setoption name EvalFile value <path>)");
         return;
     }
-    uci_println!("nnue {}", game.nnue_network.evaluate_position(&game.current_position()));
+    uci_println!(
+        "nnue {}",
+        game.nnue_network
+            .evaluate_position(&game.current_position())
+    );
 }
 
 /// Handle the "dbg" command: print diagnostic counters.
@@ -79,7 +83,10 @@ fn handle_uci(engine: &mut Engine, _args: &[String]) {
     let game = engine.game();
     uci_println!("id name Pawnstar {}", version_string());
     uci_println!("id author Jonny Reckless");
-    uci_println!("option name Hash type spin default {} min 1 max 4096", HASHTABLE_MEGABYTES);
+    uci_println!(
+        "option name Hash type spin default {} min 1 max 4096",
+        HASHTABLE_MEGABYTES
+    );
     uci_println!(
         "option name Threads type spin default {} min 1 max {}",
         game.thread_count,
@@ -88,7 +95,10 @@ fn handle_uci(engine: &mut Engine, _args: &[String]) {
     uci_println!("option name Ponder type check default false");
     uci_println!("option name EvalFile type string default <empty>");
     uci_println!("option name Clear Hash type button");
-    uci_println!("option name Move Overhead type spin default {} min 0 max 5000", game.move_overhead);
+    uci_println!(
+        "option name Move Overhead type spin default {} min 0 max 5000",
+        game.move_overhead
+    );
     uci_println!(
         "option name OwnBook type check default {}",
         if game.use_own_book { "true" } else { "false" }
@@ -212,7 +222,12 @@ fn handle_bench(engine: &mut Engine, args: &[String]) {
         total_nodes += nodes;
         if debug {
             pos_index += 1;
-            uci_println!("### pos {:02} bm={} nodes={}", pos_index, mv.to_string(), nodes);
+            uci_println!(
+                "### pos {:02} bm={} nodes={}",
+                pos_index,
+                mv.to_string(),
+                nodes
+            );
             debug_x_write();
         }
     }
@@ -235,7 +250,16 @@ fn handle_go(engine: &mut Engine, args: &[String]) {
         AwaitValue,   // Expecting the integer argument for `pending`.
         CollectMoves, // Collecting the move list that follows `searchmoves`.
     }
-    const VALUE_KEYWORDS: [&str; 8] = ["wtime", "btime", "winc", "binc", "movetime", "depth", "movestogo", "nodes"];
+    const VALUE_KEYWORDS: [&str; 8] = [
+        "wtime",
+        "btime",
+        "winc",
+        "binc",
+        "movetime",
+        "depth",
+        "movestogo",
+        "nodes",
+    ];
 
     // The C++ parses into the live Game then StartThinking stops any previous search; game_mut
     // stops first, then parses — a benign, strictly-safer reordering.
@@ -255,7 +279,10 @@ fn handle_go(engine: &mut Engine, args: &[String]) {
         match state {
             State::CollectMoves => {
                 // Collect coordinate-notation moves until the next recognised keyword.
-                if token == "ponder" || token == "infinite" || token == "searchmoves" || VALUE_KEYWORDS.contains(&token)
+                if token == "ponder"
+                    || token == "infinite"
+                    || token == "searchmoves"
+                    || VALUE_KEYWORDS.contains(&token)
                 {
                     state = State::AwaitKeyword;
                     continue; // reprocess this keyword (the C++ --i)
@@ -411,24 +438,96 @@ fn handle_help(_engine: &mut Engine, _args: &[String]) {
 
 /// Table of all supported input commands and their handlers.
 pub static HANDLERS: &[Handler] = &[
-    Handler { function: handle_bench, name: "bench", description: "Search a fixed position set to fixed depth; print nodes + nps" },
-    Handler { function: handle_bookmoves, name: "bookmoves", description: "Display available book moves for current position" },
-    Handler { function: handle_dbg, name: "dbg", description: "Display diagnostic counts" },
-    Handler { function: handle_dbgclear, name: "dbgclear", description: "Reset diagnostic counts" },
-    Handler { function: handle_eval, name: "eval", description: "Display the current static evaluation" },
-    Handler { function: handle_freebook, name: "freebook", description: "Delete the opening book from memory" },
-    Handler { function: handle_getboard, name: "getboard", description: "Display the FEN of the current position" },
-    Handler { function: handle_go, name: "go", description: "Search the current position" },
-    Handler { function: handle_help, name: "help", description: "Display a summary of commands" },
-    Handler { function: handle_isready, name: "isready", description: "Respond with readyok" },
-    Handler { function: handle_nnue, name: "nnue", description: "Display the raw NNUE evaluation of the current position" },
-    Handler { function: handle_ponderhit, name: "ponderhit", description: "Pondered move was played; convert ponder search to a timed search" },
-    Handler { function: handle_position, name: "position", description: "Set the position and series of moves" },
-    Handler { function: handle_quit, name: "quit", description: "Exit the program" },
-    Handler { function: handle_setoption, name: "setoption", description: "Set a UCI option (EvalFile/Hash/Threads/Clear Hash/Move Overhead/OwnBook)" },
-    Handler { function: handle_stop, name: "stop", description: "Stop searching and return best move found" },
-    Handler { function: handle_uci, name: "uci", description: "Enter UCI protocol" },
-    Handler { function: handle_ucinewgame, name: "ucinewgame", description: "UCI mode start new game" },
+    Handler {
+        function: handle_bench,
+        name: "bench",
+        description: "Search a fixed position set to fixed depth; print nodes + nps",
+    },
+    Handler {
+        function: handle_bookmoves,
+        name: "bookmoves",
+        description: "Display available book moves for current position",
+    },
+    Handler {
+        function: handle_dbg,
+        name: "dbg",
+        description: "Display diagnostic counts",
+    },
+    Handler {
+        function: handle_dbgclear,
+        name: "dbgclear",
+        description: "Reset diagnostic counts",
+    },
+    Handler {
+        function: handle_eval,
+        name: "eval",
+        description: "Display the current static evaluation",
+    },
+    Handler {
+        function: handle_freebook,
+        name: "freebook",
+        description: "Delete the opening book from memory",
+    },
+    Handler {
+        function: handle_getboard,
+        name: "getboard",
+        description: "Display the FEN of the current position",
+    },
+    Handler {
+        function: handle_go,
+        name: "go",
+        description: "Search the current position",
+    },
+    Handler {
+        function: handle_help,
+        name: "help",
+        description: "Display a summary of commands",
+    },
+    Handler {
+        function: handle_isready,
+        name: "isready",
+        description: "Respond with readyok",
+    },
+    Handler {
+        function: handle_nnue,
+        name: "nnue",
+        description: "Display the raw NNUE evaluation of the current position",
+    },
+    Handler {
+        function: handle_ponderhit,
+        name: "ponderhit",
+        description: "Pondered move was played; convert ponder search to a timed search",
+    },
+    Handler {
+        function: handle_position,
+        name: "position",
+        description: "Set the position and series of moves",
+    },
+    Handler {
+        function: handle_quit,
+        name: "quit",
+        description: "Exit the program",
+    },
+    Handler {
+        function: handle_setoption,
+        name: "setoption",
+        description: "Set a UCI option (EvalFile/Hash/Threads/Clear Hash/Move Overhead/OwnBook)",
+    },
+    Handler {
+        function: handle_stop,
+        name: "stop",
+        description: "Stop searching and return best move found",
+    },
+    Handler {
+        function: handle_uci,
+        name: "uci",
+        description: "Enter UCI protocol",
+    },
+    Handler {
+        function: handle_ucinewgame,
+        name: "ucinewgame",
+        description: "UCI mode start new game",
+    },
 ];
 
 /// Tokenize a line of input and dispatch it to the matching command handler.

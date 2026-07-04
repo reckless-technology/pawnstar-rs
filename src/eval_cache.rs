@@ -34,7 +34,10 @@ impl EvalCache {
         }
         let mut table = Vec::with_capacity(pow2);
         table.resize_with(pow2, || AtomicU64::new(0));
-        EvalCache { table, mask: pow2 - 1 }
+        EvalCache {
+            table,
+            mask: pow2 - 1,
+        }
     }
 
     /// Probe the cache for a position. Returns the cached evaluation (centipawns, side-to-move

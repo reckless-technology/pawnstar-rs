@@ -8,7 +8,7 @@ use crate::square::Square;
 
 /// Pinned pieces on the board and the squares to which they are allowed to move.
 pub struct Pins {
-    pinned_pieces: Bitboard,        // Set of squares which are pinned.
+    pinned_pieces: Bitboard,         // Set of squares which are pinned.
     allowed_squares: [Bitboard; 64], // Allowed squares per source.
 }
 

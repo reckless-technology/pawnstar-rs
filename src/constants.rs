@@ -81,8 +81,8 @@ pub const fn enemy_of(color: Color) -> Color {
 pub const HASHTABLE_MEGABYTES: i32 = 64; // default transposition table size in MB
 pub const EVAL_CACHE_MB: i32 = 8; // NNUE evaluation cache size in MB (lockless)
 pub const MAX_MOVES_PER_POSITION: usize = 256; // maximum possible number of moves for a chess position
-// Score band (all comfortably within int16, so eval-cache packing and mate scores never overflow):
-//   |eval| <= MAX_EVALUATION (30000) < WIN_THRESHOLD (31000) < |mate| in [31836,31900] < BETA (32000) < 32767.
+                                               // Score band (all comfortably within int16, so eval-cache packing and mate scores never overflow):
+                                               //   |eval| <= MAX_EVALUATION (30000) < WIN_THRESHOLD (31000) < |mate| in [31836,31900] < BETA (32000) < 32767.
 pub const BETA: i32 = 32000; // greater than any possible evaluation score
 pub const ALPHA: i32 = -32000; // smaller than any possible evaluation score
 pub const CHECKMATED_SCORE: i32 = -31900; // score for losing the game (mate scores = this + ply)

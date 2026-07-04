@@ -30,7 +30,8 @@ pub const QB: i32 = 64; // Output-layer weight scale.
 pub const SCALE: i32 = 400; // Maps the raw network output to centipawns.
 
 /// Total size of the quantised weight payload: every weight a little-endian int16, tightly packed.
-pub const NET_FILE_BYTES: usize = (FEATURE_ROWS * HIDDEN_SIZE + HIDDEN_SIZE + 2 * HIDDEN_SIZE + 1) * 2;
+pub const NET_FILE_BYTES: usize =
+    (FEATURE_ROWS * HIDDEN_SIZE + HIDDEN_SIZE + 2 * HIDDEN_SIZE + 1) * 2;
 
 /// Magic identifying a Pawnstar-stamped NNUE file ("PSN" + format version byte).
 pub const NET_MAGIC: [u8; 4] = *b"PSN1";
@@ -123,7 +124,13 @@ impl Default for Accumulator {
 /// `x` is an accumulator value (already in QA units); result is in QA*QA units.
 #[inline(always)]
 pub fn screlu(x: i16) -> i32 {
-    let y: i32 = if x < 0 { 0 } else if x as i32 > QA { QA } else { x as i32 };
+    let y: i32 = if x < 0 {
+        0
+    } else if x as i32 > QA {
+        QA
+    } else {
+        x as i32
+    };
     y * y
 }
 
@@ -190,12 +197,17 @@ fn row(bucket: i32, color: usize, piece: usize, sq: usize, black: bool) -> usize
 /// A perspective's king bucket: index the map with that perspective's king square, oriented to it.
 #[inline(always)]
 pub fn white_bucket(p: &Position) -> i32 {
-    KING_BUCKET_MAP[(p.pieces[Piece::King.index()] & p.colors[Color::White.index()]).lsb().index()]
+    KING_BUCKET_MAP[(p.pieces[Piece::King.index()] & p.colors[Color::White.index()])
+        .lsb()
+        .index()]
 }
 
 #[inline(always)]
 pub fn black_bucket(p: &Position) -> i32 {
-    KING_BUCKET_MAP[(p.pieces[Piece::King.index()] & p.colors[Color::Black.index()]).lsb().index() ^ RANK_FLIP as usize]
+    KING_BUCKET_MAP[(p.pieces[Piece::King.index()] & p.colors[Color::Black.index()])
+        .lsb()
+        .index()
+        ^ RANK_FLIP as usize]
 }
 
 /// Shared dequantisation tail: SCReLU leaves the dot in QA*QA*QB units; reduce one QA, add the
@@ -250,7 +262,9 @@ impl Network {
     /// accumulator add/sub loops vectorize without per-element bounds checks).
     #[inline(always)]
     fn column(&self, r: usize) -> &[i16; HIDDEN_SIZE] {
-        (&self.feature_weights.0[r..r + HIDDEN_SIZE]).try_into().unwrap()
+        (&self.feature_weights.0[r..r + HIDDEN_SIZE])
+            .try_into()
+            .unwrap()
     }
 
     /// Construct an unloaded network (weights zeroed; the C++ leaves them uninitialised).
@@ -386,7 +400,13 @@ impl Network {
     }
 
     /// Rebuild a single perspective from scratch (bias + every piece) using its king bucket.
-    fn refresh_side(&self, side: &mut [i16; HIDDEN_SIZE], position: &Position, bucket: i32, black: bool) {
+    fn refresh_side(
+        &self,
+        side: &mut [i16; HIDDEN_SIZE],
+        position: &Position,
+        bucket: i32,
+        black: bool,
+    ) {
         *side = self.feature_bias;
         for color in [Color::White, Color::Black] {
             let friendly = position.colors[color.index()];
@@ -401,7 +421,14 @@ impl Network {
 
     /// Apply the piece-placement delta from `from` to `to` to a single perspective, within one
     /// (unchanged) king bucket.
-    fn diff_side(&self, side: &mut [i16; HIDDEN_SIZE], from: &Position, to: &Position, bucket: i32, black: bool) {
+    fn diff_side(
+        &self,
+        side: &mut [i16; HIDDEN_SIZE],
+        from: &Position,
+        to: &Position,
+        bucket: i32,
+        black: bool,
+    ) {
         for color in [Color::White, Color::Black] {
             for piece in Piece::ALL {
                 let from_bb = from.pieces[piece.index()] & from.colors[color.index()];
@@ -500,21 +527,41 @@ impl Network {
         // Scalar int8 kernel, bit-identical to the C++ AVX2/VNNI paths: clamp [0,QA], square,
         // round, >>S to uint8; dot with int8 weights, accumulate exactly.
         let white_to_move = side_to_move == Color::White;
-        let stm_acc = if white_to_move { &acc.white } else { &acc.black };
-        let ntm_acc = if white_to_move { &acc.black } else { &acc.white };
+        let stm_acc = if white_to_move {
+            &acc.white
+        } else {
+            &acc.black
+        };
+        let ntm_acc = if white_to_move {
+            &acc.black
+        } else {
+            &acc.white
+        };
 
         #[inline(always)]
         fn u8_act(x: i16) -> i32 {
-            let c: i32 = if x < 0 { 0 } else if x as i32 > QA { QA } else { x as i32 };
+            let c: i32 = if x < 0 {
+                0
+            } else if x as i32 > QA {
+                QA
+            } else {
+                x as i32
+            };
             let a = (c * c + (1 << (INT8_SHIFT - 1))) >> INT8_SHIFT;
-            if a > 255 { 255 } else { a }
+            if a > 255 {
+                255
+            } else {
+                a
+            }
         }
 
         // Accumulate in i32: |dot8| <= 2 * HIDDEN_SIZE * 255 * 127 ≈ 66M << 2^31, so this is
         // bit-identical to the C++ scalar's int64 accumulation (and matches its AVX2 kernel,
         // which also accumulates in int32) while letting LLVM vectorize the loop.
-        let w_stm: &[i8; HIDDEN_SIZE] = (&self.output_weights_i8[..HIDDEN_SIZE]).try_into().unwrap();
-        let w_ntm: &[i8; HIDDEN_SIZE] = (&self.output_weights_i8[HIDDEN_SIZE..]).try_into().unwrap();
+        let w_stm: &[i8; HIDDEN_SIZE] =
+            (&self.output_weights_i8[..HIDDEN_SIZE]).try_into().unwrap();
+        let w_ntm: &[i8; HIDDEN_SIZE] =
+            (&self.output_weights_i8[HIDDEN_SIZE..]).try_into().unwrap();
         let mut dot8: i32 = 0;
         for i in 0..HIDDEN_SIZE {
             dot8 += u8_act(stm_acc[i]) * w_stm[i] as i32;
@@ -536,8 +583,16 @@ impl Network {
     /// evaluate approximates. Not used on the search hot path.
     pub fn evaluate_exact(&self, acc: &Accumulator, side_to_move: Color) -> i32 {
         let white_to_move = side_to_move == Color::White;
-        let stm_acc = if white_to_move { &acc.white } else { &acc.black };
-        let ntm_acc = if white_to_move { &acc.black } else { &acc.white };
+        let stm_acc = if white_to_move {
+            &acc.white
+        } else {
+            &acc.black
+        };
+        let ntm_acc = if white_to_move {
+            &acc.black
+        } else {
+            &acc.white
+        };
 
         let mut output: i64 = 0;
         for i in 0..HIDDEN_SIZE {
@@ -558,5 +613,9 @@ impl Network {
 /// `std::lround` semantics: round half away from zero.
 #[inline]
 fn lround(x: f64) -> i64 {
-    if x >= 0.0 { (x + 0.5).floor() as i64 } else { (x - 0.5).ceil() as i64 }
+    if x >= 0.0 {
+        (x + 0.5).floor() as i64
+    } else {
+        (x - 0.5).ceil() as i64
+    }
 }

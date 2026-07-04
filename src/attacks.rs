@@ -15,14 +15,18 @@ use crate::square::Square;
 #[inline(always)]
 pub fn bishop_attacks(occupied_squares: Bitboard, s: Square) -> Bitboard {
     let m = &BISHOP_MAGICS[s.index()];
-    m.attacks[m.indices[(((occupied_squares.0 & m.occupancy_mask.0).wrapping_mul(m.magic)) >> m.shift) as usize] as usize]
+    m.attacks[m.indices
+        [(((occupied_squares.0 & m.occupancy_mask.0).wrapping_mul(m.magic)) >> m.shift) as usize]
+        as usize]
 }
 
 /// Rook sliding attacks: set of squares attacked by a rook on `s` given `occupied_squares`.
 #[inline(always)]
 pub fn rook_attacks(occupied_squares: Bitboard, s: Square) -> Bitboard {
     let m = &ROOK_MAGICS[s.index()];
-    m.attacks[m.indices[(((occupied_squares.0 & m.occupancy_mask.0).wrapping_mul(m.magic)) >> m.shift) as usize] as usize]
+    m.attacks[m.indices
+        [(((occupied_squares.0 & m.occupancy_mask.0).wrapping_mul(m.magic)) >> m.shift) as usize]
+        as usize]
 }
 
 /// Queen sliding attacks: set of squares attacked by a queen on `s` given `occupied_squares`.

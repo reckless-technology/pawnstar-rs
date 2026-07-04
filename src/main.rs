@@ -61,7 +61,11 @@ fn main() {
          Pawnstar: a UCI compatible chess engine\n\
          (C) Jonny Reckless 2009 - 2026\n"
     );
-    println!("Version {} Compiled {}", version_string(), env!("PAWNSTAR_BUILD_TIMESTAMP"));
+    println!(
+        "Version {} Compiled {}",
+        version_string(),
+        env!("PAWNSTAR_BUILD_TIMESTAMP")
+    );
     let _ = std::io::stdout().flush();
 
     let mut engine = Engine::new();
@@ -79,7 +83,9 @@ fn main() {
                     EMBEDDED_BOOK.len()
                 );
             } else {
-                println!("info string Unable to open book file (and the embedded fallback failed).");
+                println!(
+                    "info string Unable to open book file (and the embedded fallback failed)."
+                );
             }
         }
         // NNUE is the only evaluator, so a net is required. Load the shipped net from the working
@@ -88,7 +94,8 @@ fn main() {
         // net cannot be loaded, fall back to the copy embedded in the binary so the engine always
         // has a working evaluator. Only if even that fails — which would mean the build is
         // corrupt — does the engine give up.
-        let net_path = std::env::var("PAWNSTAR_EVALFILE").unwrap_or_else(|_| locate_resource("nnue/pawnstar-v12.bin"));
+        let net_path = std::env::var("PAWNSTAR_EVALFILE")
+            .unwrap_or_else(|_| locate_resource("nnue/pawnstar-v12.bin"));
         if !game.nnue_network.load(&net_path) {
             println!(
                 "info string NNUE: file load failed; falling back to the embedded net ({} bytes)",

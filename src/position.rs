@@ -5,8 +5,8 @@ use crate::bitboard::{Bitboard, NO_SQUARES, RANK_1, RANK_4, RANK_5, RANK_8, WHIT
 use crate::castling_rights::CastlingRights;
 use crate::constants::{enemy_of, Color, Piece};
 use crate::generated_data::{
-    ZobristT, BLACK_MOVE_HASH, EAST_WEST, EN_PASSANT_HASHES, INTERVENING_SQUARES, KING_ATTACKS, KNIGHT_ATTACKS,
-    PAWN_ATTACKS_BLACK, PAWN_ATTACKS_WHITE, PIECE_SQUARE_HASHES,
+    ZobristT, BLACK_MOVE_HASH, EAST_WEST, EN_PASSANT_HASHES, INTERVENING_SQUARES, KING_ATTACKS,
+    KNIGHT_ATTACKS, PAWN_ATTACKS_BLACK, PAWN_ATTACKS_WHITE, PIECE_SQUARE_HASHES,
 };
 use crate::increment;
 use crate::moves::{Move, MoveList, MoveType};
@@ -19,18 +19,18 @@ use crate::square::Square;
 #[derive(Clone, Copy)]
 pub struct Position {
     // State variables
-    pub pieces: [Bitboard; 7],       // Bitboards indexed by Piece (index 0 = occupied squares)
-    pub colors: [Bitboard; 2],       // Per-color bitboards indexed by Color.
-    pub squares: [Piece; 64],        // Squares array for fast piece lookup.
-    pub checkers: Bitboard,          // Set of squares which attack the king.
-    pub hash: ZobristT,              // Zobrist hash of this position, maintained incrementally.
-    pub king_location: [Square; 2],  // Square index of white and black kings.
-    pub en_passant_square: Square,   // En passant capture availability square.
-    pub reversible_move_count: u8,   // Number of consecutive reversible half-moves (plies).
-    pub full_move_count: u8,         // Number of full moves (zero indexed).
+    pub pieces: [Bitboard; 7], // Bitboards indexed by Piece (index 0 = occupied squares)
+    pub colors: [Bitboard; 2], // Per-color bitboards indexed by Color.
+    pub squares: [Piece; 64],  // Squares array for fast piece lookup.
+    pub checkers: Bitboard,    // Set of squares which attack the king.
+    pub hash: ZobristT,        // Zobrist hash of this position, maintained incrementally.
+    pub king_location: [Square; 2], // Square index of white and black kings.
+    pub en_passant_square: Square, // En passant capture availability square.
+    pub reversible_move_count: u8, // Number of consecutive reversible half-moves (plies).
+    pub full_move_count: u8,   // Number of full moves (zero indexed).
     pub castling_rights: CastlingRights, // Castling rights flags.
-    pub is_null_move: bool,          // Whether the last move was a null (pass) move.
-    pub color_to_move: Color,        // Side to move.
+    pub is_null_move: bool,    // Whether the last move was a null (pass) move.
+    pub color_to_move: Color,  // Side to move.
 }
 
 impl Default for Position {
@@ -148,7 +148,12 @@ impl Position {
         // Generate King moves.
         let king_captures = king_move_targets & enemy_pieces;
         for to in king_captures {
-            moves.push_back(Move::capture(king_locn, to, Piece::King, self.squares[to.index()]));
+            moves.push_back(Move::capture(
+                king_locn,
+                to,
+                Piece::King,
+                self.squares[to.index()],
+            ));
         }
         if DO_ALL_MOVES {
             let king_non_captures = king_move_targets & !occupied_squares;
@@ -208,14 +213,20 @@ impl Position {
                     && !self.is_attacked(Square::from_str("F1"), Color::Black)
                     && !self.is_attacked(Square::from_str("G1"), Color::Black)
                 {
-                    moves.push_back(Move::castling(Square::from_str("E1"), Square::from_str("G1")));
+                    moves.push_back(Move::castling(
+                        Square::from_str("E1"),
+                        Square::from_str("G1"),
+                    ));
                 }
                 if self.castling_rights.may_white_castle_queenside()
                     && (occupied_squares & (sq_bb("B1") | sq_bb("C1") | sq_bb("D1"))).is_empty()
                     && !self.is_attacked(Square::from_str("D1"), Color::Black)
                     && !self.is_attacked(Square::from_str("C1"), Color::Black)
                 {
-                    moves.push_back(Move::castling(Square::from_str("E1"), Square::from_str("C1")));
+                    moves.push_back(Move::castling(
+                        Square::from_str("E1"),
+                        Square::from_str("C1"),
+                    ));
                 }
             } else {
                 if self.castling_rights.may_black_castle_kingside()
@@ -223,14 +234,20 @@ impl Position {
                     && !self.is_attacked(Square::from_str("F8"), Color::White)
                     && !self.is_attacked(Square::from_str("G8"), Color::White)
                 {
-                    moves.push_back(Move::castling(Square::from_str("E8"), Square::from_str("G8")));
+                    moves.push_back(Move::castling(
+                        Square::from_str("E8"),
+                        Square::from_str("G8"),
+                    ));
                 }
                 if self.castling_rights.may_black_castle_queenside()
                     && (occupied_squares & (sq_bb("B8") | sq_bb("C8") | sq_bb("D8"))).is_empty()
                     && !self.is_attacked(Square::from_str("D8"), Color::White)
                     && !self.is_attacked(Square::from_str("C8"), Color::White)
                 {
-                    moves.push_back(Move::castling(Square::from_str("E8"), Square::from_str("C8")));
+                    moves.push_back(Move::castling(
+                        Square::from_str("E8"),
+                        Square::from_str("C8"),
+                    ));
                 }
             }
         }
@@ -288,16 +305,37 @@ impl Position {
         captures_east ^= promotions_east;
         single_pushes ^= promotions;
 
-        let capture_promotions: [(Bitboard, i8); 2] = [(promotions_west, west_delta), (promotions_east, east_delta)];
+        let capture_promotions: [(Bitboard, i8); 2] =
+            [(promotions_west, west_delta), (promotions_east, east_delta)];
         for (bb, delta) in capture_promotions {
             let b = bb & allowed_captures;
             for to in b {
                 let from = Square((to.0 as i32 - delta as i32) as u8);
                 if pins.is_allowed(from, to) {
-                    moves.push_back(Move::promotion(from, to, Piece::Queen, self.squares[to.index()]));
-                    moves.push_back(Move::promotion(from, to, Piece::Rook, self.squares[to.index()]));
-                    moves.push_back(Move::promotion(from, to, Piece::Bishop, self.squares[to.index()]));
-                    moves.push_back(Move::promotion(from, to, Piece::Knight, self.squares[to.index()]));
+                    moves.push_back(Move::promotion(
+                        from,
+                        to,
+                        Piece::Queen,
+                        self.squares[to.index()],
+                    ));
+                    moves.push_back(Move::promotion(
+                        from,
+                        to,
+                        Piece::Rook,
+                        self.squares[to.index()],
+                    ));
+                    moves.push_back(Move::promotion(
+                        from,
+                        to,
+                        Piece::Bishop,
+                        self.squares[to.index()],
+                    ));
+                    moves.push_back(Move::promotion(
+                        from,
+                        to,
+                        Piece::Knight,
+                        self.squares[to.index()],
+                    ));
                 }
             }
         }
@@ -311,13 +349,19 @@ impl Position {
                 moves.push_back(Move::promotion(from, to, Piece::Knight, Piece::None));
             }
         }
-        let captures: [(Bitboard, i8); 2] = [(captures_west, west_delta), (captures_east, east_delta)];
+        let captures: [(Bitboard, i8); 2] =
+            [(captures_west, west_delta), (captures_east, east_delta)];
         for (bb, delta) in captures {
             let b = bb & allowed_captures;
             for to in b {
                 let from = Square((to.0 as i32 - delta as i32) as u8);
                 if pins.is_allowed(from, to) {
-                    moves.push_back(Move::capture(from, to, Piece::Pawn, self.squares[to.index()]));
+                    moves.push_back(Move::capture(
+                        from,
+                        to,
+                        Piece::Pawn,
+                        self.squares[to.index()],
+                    ));
                 }
             }
         }
@@ -344,7 +388,8 @@ impl Position {
             let to = self.en_passant_square;
             // The captured pawn is on the source rank, destination file.
             let captured_pawn_locn = Square((from.0 & 0x38) | (to.0 & 0x07));
-            if pins.is_allowed(from, to) && (allowed_captures & Bitboard::from_square(captured_pawn_locn)).is_not_empty()
+            if pins.is_allowed(from, to)
+                && (allowed_captures & Bitboard::from_square(captured_pawn_locn)).is_not_empty()
             {
                 // Test for the weird check that occurs when there is an enemy rook or queen on the
                 // same rank as our king which is only discovered after removing both pawns from the
@@ -352,10 +397,11 @@ impl Position {
                 if king_locn.rank() == from.rank() {
                     // Remove the capturing and ep captured pawns from the occupied squares set and
                     // test for horizontal ray attacks.
-                    let pseudo_occupied_squares =
-                        occupied_squares ^ Bitboard::from_square(captured_pawn_locn) ^ Bitboard::from_square(from);
-                    let horizontal_attacks =
-                        rook_attacks(pseudo_occupied_squares, king_locn) & EAST_WEST[king_locn.index()];
+                    let pseudo_occupied_squares = occupied_squares
+                        ^ Bitboard::from_square(captured_pawn_locn)
+                        ^ Bitboard::from_square(from);
+                    let horizontal_attacks = rook_attacks(pseudo_occupied_squares, king_locn)
+                        & EAST_WEST[king_locn.index()];
                     if (horizontal_attacks
                         & enemy_pieces
                         & (self.pieces[Piece::Rook.index()] | self.pieces[Piece::Queen.index()]))
@@ -454,7 +500,10 @@ impl Position {
                 position.remove_piece(enemy_of(color), mv.captured(), to);
                 position.move_piece(color, piece, from, to);
             }
-            MoveType::PromotionKnight | MoveType::PromotionBishop | MoveType::PromotionRook | MoveType::PromotionQueen => {
+            MoveType::PromotionKnight
+            | MoveType::PromotionBishop
+            | MoveType::PromotionRook
+            | MoveType::PromotionQueen => {
                 position.reversible_move_count = 0;
                 if mv.captured() != Piece::None {
                     position.remove_piece(enemy_of(color), mv.captured(), to);
@@ -471,23 +520,67 @@ impl Position {
             MoveType::EpCapture => {
                 position.reversible_move_count = 0;
                 // En passant capture: capture location is source rank, destination file.
-                position.remove_piece(enemy_of(color), Piece::Pawn, Square((from.0 & 0x38) | (to.0 & 0x07)));
+                position.remove_piece(
+                    enemy_of(color),
+                    Piece::Pawn,
+                    Square((from.0 & 0x38) | (to.0 & 0x07)),
+                );
                 position.move_piece(color, Piece::Pawn, from, to);
             }
             MoveType::Castling => {
                 position.reversible_move_count = 0;
                 if to == G1 {
-                    position.move_piece(Color::White, Piece::King, Square::from_str("E1"), Square::from_str("G1"));
-                    position.move_piece(Color::White, Piece::Rook, Square::from_str("H1"), Square::from_str("F1"));
+                    position.move_piece(
+                        Color::White,
+                        Piece::King,
+                        Square::from_str("E1"),
+                        Square::from_str("G1"),
+                    );
+                    position.move_piece(
+                        Color::White,
+                        Piece::Rook,
+                        Square::from_str("H1"),
+                        Square::from_str("F1"),
+                    );
                 } else if to == C1 {
-                    position.move_piece(Color::White, Piece::King, Square::from_str("E1"), Square::from_str("C1"));
-                    position.move_piece(Color::White, Piece::Rook, Square::from_str("A1"), Square::from_str("D1"));
+                    position.move_piece(
+                        Color::White,
+                        Piece::King,
+                        Square::from_str("E1"),
+                        Square::from_str("C1"),
+                    );
+                    position.move_piece(
+                        Color::White,
+                        Piece::Rook,
+                        Square::from_str("A1"),
+                        Square::from_str("D1"),
+                    );
                 } else if to == G8 {
-                    position.move_piece(Color::Black, Piece::King, Square::from_str("E8"), Square::from_str("G8"));
-                    position.move_piece(Color::Black, Piece::Rook, Square::from_str("H8"), Square::from_str("F8"));
+                    position.move_piece(
+                        Color::Black,
+                        Piece::King,
+                        Square::from_str("E8"),
+                        Square::from_str("G8"),
+                    );
+                    position.move_piece(
+                        Color::Black,
+                        Piece::Rook,
+                        Square::from_str("H8"),
+                        Square::from_str("F8"),
+                    );
                 } else if to == C8 {
-                    position.move_piece(Color::Black, Piece::King, Square::from_str("E8"), Square::from_str("C8"));
-                    position.move_piece(Color::Black, Piece::Rook, Square::from_str("A8"), Square::from_str("D8"));
+                    position.move_piece(
+                        Color::Black,
+                        Piece::King,
+                        Square::from_str("E8"),
+                        Square::from_str("C8"),
+                    );
+                    position.move_piece(
+                        Color::Black,
+                        Piece::Rook,
+                        Square::from_str("A8"),
+                        Square::from_str("D8"),
+                    );
                 }
             }
         }
@@ -496,7 +589,8 @@ impl Position {
         position.full_move_count = position.full_move_count.wrapping_add(color as u8); // Increments after black's move.
         position.king_location[color.index()] =
             (position.pieces[Piece::King.index()] & position.colors[color.index()]).lsb();
-        position.checkers = position.attacks_to(position.king_location[enemy_of(color).index()], color);
+        position.checkers =
+            position.attacks_to(position.king_location[enemy_of(color).index()], color);
         position
     }
 
@@ -522,13 +616,21 @@ impl Position {
             }
             if let Some(a) = WHITE_PIECE_NAMES.find(c) {
                 let piece = Piece::from_u8(a as u8 + 1);
-                position.add_piece(Color::White, piece, Square::from_file_rank(x as u8, y as u8));
+                position.add_piece(
+                    Color::White,
+                    piece,
+                    Square::from_file_rank(x as u8, y as u8),
+                );
                 x += 1;
                 continue;
             }
             if let Some(a) = BLACK_PIECE_NAMES.find(c) {
                 let piece = Piece::from_u8(a as u8 + 1);
-                position.add_piece(Color::Black, piece, Square::from_file_rank(x as u8, y as u8));
+                position.add_piece(
+                    Color::Black,
+                    piece,
+                    Square::from_file_rank(x as u8, y as u8),
+                );
                 x += 1;
                 continue;
             }
@@ -563,7 +665,8 @@ impl Position {
         position.hash = position.compute_hash();
         // Is this position check?
         let color = position.color_to_move;
-        position.checkers = position.attacks_to(position.king_location[color.index()], enemy_of(color));
+        position.checkers =
+            position.attacks_to(position.king_location[color.index()], enemy_of(color));
         position
     }
 
@@ -583,7 +686,10 @@ impl Position {
                         num_empty_squares = 0;
                     }
                     let sq = (x + 8 * y) as usize;
-                    let piece = if (self.colors[Color::White.index()] & Bitboard::from_file_rank(x, y)).is_not_empty() {
+                    let piece = if (self.colors[Color::White.index()]
+                        & Bitboard::from_file_rank(x, y))
+                    .is_not_empty()
+                    {
                         b" PNBRQK"[self.squares[sq].index()]
                     } else {
                         b" pnbrqk"[self.squares[sq].index()]
@@ -600,7 +706,11 @@ impl Position {
         }
         // Side to move
         ss.push(' ');
-        ss.push(if self.color_to_move == Color::Black { 'b' } else { 'w' });
+        ss.push(if self.color_to_move == Color::Black {
+            'b'
+        } else {
+            'w'
+        });
         ss.push(' ');
         // Castling rights
         ss.push_str(&self.castling_rights.to_fen_string());
@@ -636,7 +746,9 @@ impl Position {
             }
             3 => {
                 // king and bishop vs king or king and knight vs king
-                if (self.pieces[Piece::Bishop.index()] | self.pieces[Piece::Knight.index()]).is_not_empty() {
+                if (self.pieces[Piece::Bishop.index()] | self.pieces[Piece::Knight.index()])
+                    .is_not_empty()
+                {
                     increment!("draws by material 3");
                     return true;
                 }
@@ -644,10 +756,14 @@ impl Position {
             }
             4 => {
                 // king and bishop vs king and bishop with bishops on same color square
-                let white_bishops = self.pieces[Piece::Bishop.index()] & self.colors[Color::White.index()];
-                let black_bishops = self.pieces[Piece::Bishop.index()] & self.colors[Color::Black.index()];
-                let is_white_bishop_on_white_square = (white_bishops & WHITE_SQUARES).is_not_empty();
-                let is_black_bishop_on_white_square = (black_bishops & WHITE_SQUARES).is_not_empty();
+                let white_bishops =
+                    self.pieces[Piece::Bishop.index()] & self.colors[Color::White.index()];
+                let black_bishops =
+                    self.pieces[Piece::Bishop.index()] & self.colors[Color::Black.index()];
+                let is_white_bishop_on_white_square =
+                    (white_bishops & WHITE_SQUARES).is_not_empty();
+                let is_black_bishop_on_white_square =
+                    (black_bishops & WHITE_SQUARES).is_not_empty();
                 if white_bishops.is_not_empty()
                     && black_bishops.is_not_empty()
                     && is_white_bishop_on_white_square == is_black_bishop_on_white_square
@@ -663,7 +779,11 @@ impl Position {
 
     /// Compute the Zobrist hash for a chess position from scratch.
     pub fn compute_hash(&self) -> ZobristT {
-        let mut hash: ZobristT = if self.color_to_move == Color::Black { BLACK_MOVE_HASH } else { 0 };
+        let mut hash: ZobristT = if self.color_to_move == Color::Black {
+            BLACK_MOVE_HASH
+        } else {
+            0
+        };
         hash ^= self.castling_rights.hash();
         hash ^= EN_PASSANT_HASHES[self.en_passant_square.index()];
         for piece in Piece::ALL {

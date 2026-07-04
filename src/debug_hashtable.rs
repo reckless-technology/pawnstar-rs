@@ -14,7 +14,8 @@ mod imp {
     use std::sync::Mutex;
 
     /// Global dictionary of named diagnostic counters.
-    static DEBUG_DICTIONARY: Mutex<BTreeMap<&'static str, &'static AtomicI64>> = Mutex::new(BTreeMap::new());
+    static DEBUG_DICTIONARY: Mutex<BTreeMap<&'static str, &'static AtomicI64>> =
+        Mutex::new(BTreeMap::new());
 
     /// Find-or-create the counter slot for a name and return a stable reference to it.
     /// Slots are leaked (never freed) so the references cached at each `increment!` call site
@@ -22,7 +23,8 @@ mod imp {
     /// creations from worker threads don't race on the map.
     pub fn debug_slot(name: &'static str) -> &'static AtomicI64 {
         let mut map = DEBUG_DICTIONARY.lock().unwrap();
-        map.entry(name).or_insert_with(|| Box::leak(Box::new(AtomicI64::new(0))))
+        map.entry(name)
+            .or_insert_with(|| Box::leak(Box::new(AtomicI64::new(0))))
     }
 
     /// Reset all diagnostic counters to zero. Entries are kept (not erased) so the slot pointers
@@ -67,7 +69,8 @@ pub use imp_noop::{debug_x_clear, debug_x_write};
 #[macro_export]
 macro_rules! increment {
     ($name:expr) => {{
-        static SLOT: std::sync::OnceLock<&'static std::sync::atomic::AtomicI64> = std::sync::OnceLock::new();
+        static SLOT: std::sync::OnceLock<&'static std::sync::atomic::AtomicI64> =
+            std::sync::OnceLock::new();
         SLOT.get_or_init(|| $crate::debug_hashtable::debug_slot($name))
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }};
@@ -85,7 +88,8 @@ macro_rules! increment {
 #[macro_export]
 macro_rules! assign {
     ($name:expr, $val:expr) => {{
-        static SLOT: std::sync::OnceLock<&'static std::sync::atomic::AtomicI64> = std::sync::OnceLock::new();
+        static SLOT: std::sync::OnceLock<&'static std::sync::atomic::AtomicI64> =
+            std::sync::OnceLock::new();
         SLOT.get_or_init(|| $crate::debug_hashtable::debug_slot($name))
             .store($val, std::sync::atomic::Ordering::Relaxed);
     }};
@@ -105,7 +109,8 @@ macro_rules! assign {
 #[macro_export]
 macro_rules! increment_if {
     ($b:expr, $name:expr) => {{
-        static SLOT: std::sync::OnceLock<&'static std::sync::atomic::AtomicI64> = std::sync::OnceLock::new();
+        static SLOT: std::sync::OnceLock<&'static std::sync::atomic::AtomicI64> =
+            std::sync::OnceLock::new();
         if $b {
             SLOT.get_or_init(|| $crate::debug_hashtable::debug_slot($name))
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);

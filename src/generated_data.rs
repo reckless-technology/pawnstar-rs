@@ -120,7 +120,16 @@ const fn ray_from(sq: u8, direction: Direction) -> u64 {
 }
 
 const fn knight_attacks(sq: u8) -> u64 {
-    const KNIGHT_VECTORS: [(i32, i32); 8] = [(-2, -1), (-2, 1), (-1, -2), (-1, 2), (1, -2), (1, 2), (2, -1), (2, 1)];
+    const KNIGHT_VECTORS: [(i32, i32); 8] = [
+        (-2, -1),
+        (-2, 1),
+        (-1, -2),
+        (-1, 2),
+        (1, -2),
+        (1, 2),
+        (2, -1),
+        (2, 1),
+    ];
     let mut result: u64 = 0;
     let mut i = 0;
     while i < 8 {
@@ -198,14 +207,14 @@ const fn ray_occupancy_mask(sq: u8, direction: Direction) -> u64 {
     result ^ last_square
 }
 
-fn bishop_occupancy_mask(sq: u8) -> u64 {
+pub fn bishop_occupancy_mask(sq: u8) -> u64 {
     ray_occupancy_mask(sq, Direction::Northeast)
         | ray_occupancy_mask(sq, Direction::Northwest)
         | ray_occupancy_mask(sq, Direction::Southeast)
         | ray_occupancy_mask(sq, Direction::Southwest)
 }
 
-fn rook_occupancy_mask(sq: u8) -> u64 {
+pub fn rook_occupancy_mask(sq: u8) -> u64 {
     ray_occupancy_mask(sq, Direction::North)
         | ray_occupancy_mask(sq, Direction::South)
         | ray_occupancy_mask(sq, Direction::East)
@@ -276,7 +285,12 @@ macro_rules! make_bitboards_const {
 /// into `attacks` and the slot's 1-byte index into `indices`. The assert guards against a
 /// destructive collision should the mask/attack generators ever change — regenerate the magics
 /// with dump_magics if it fires.
-pub fn build_magic_table(sq: u8, mask_fn: fn(u8) -> u64, attack_fn: fn(u64, u8) -> u64, magic: u64) -> MagicBitboard {
+pub fn build_magic_table(
+    sq: u8,
+    mask_fn: fn(u8) -> u64,
+    attack_fn: fn(u64, u8) -> u64,
+    magic: u64,
+) -> MagicBitboard {
     let mask = mask_fn(sq);
     let bits = mask.count_ones();
     let shift = 64 - bits;
@@ -305,7 +319,10 @@ pub fn build_magic_table(sq: u8, mask_fn: fn(u8) -> u64, attack_fn: fn(u64, u8) 
             continue;
         }
         let entry = *unique_index.entry(slot_attacks[idx]).or_insert_with(|| {
-            assert!(attacks.len() < 256, "more than 256 distinct attack sets — u8 index too small");
+            assert!(
+                attacks.len() < 256,
+                "more than 256 distinct attack sets — u8 index too small"
+            );
             attacks.push(Bitboard(slot_attacks[idx]));
             (attacks.len() - 1) as u8
         });
@@ -321,8 +338,14 @@ pub fn build_magic_table(sq: u8, mask_fn: fn(u8) -> u64, attack_fn: fn(u64, u8) 
 }
 
 /// Build the 64-square magic table for a sliding piece from its precomputed magic constants.
-fn make_magics(mask_fn: fn(u8) -> u64, attack_fn: fn(u64, u8) -> u64, magics: &[u64; 64]) -> Vec<MagicBitboard> {
-    (0u8..64).map(|sq| build_magic_table(sq, mask_fn, attack_fn, magics[sq as usize])).collect()
+fn make_magics(
+    mask_fn: fn(u8) -> u64,
+    attack_fn: fn(u64, u8) -> u64,
+    magics: &[u64; 64],
+) -> Vec<MagicBitboard> {
+    (0u8..64)
+        .map(|sq| build_magic_table(sq, mask_fn, attack_fn, magics[sq as usize]))
+        .collect()
 }
 
 const fn make_intervening_squares() -> [[Bitboard; 64]; 64] {
@@ -393,7 +416,11 @@ const fn make_zobrist_tables() -> ([[[ZobristT; 64]; 6]; 2], [ZobristT; 16], [Zo
     let mut sq: u8 = 0;
     while sq != 64 {
         let rank = rank_of(sq);
-        en_passant[sq as usize] = if rank == 2 || rank == 5 { prng.next() } else { 0 };
+        en_passant[sq as usize] = if rank == 2 || rank == 5 {
+            prng.next()
+        } else {
+            0
+        };
         sq += 1;
     }
 
@@ -464,8 +491,13 @@ pub const BISHOP_ATTACKS: [Bitboard; 64] = make_bitboards_const!(bishop_attacks_
 pub const ROOK_ATTACKS: [Bitboard; 64] = make_bitboards_const!(rook_attacks_on_empty_board);
 pub const KING_ATTACKS: [Bitboard; 64] = make_bitboards_const!(king_attacks);
 
-pub static BISHOP_MAGICS: LazyLock<Vec<MagicBitboard>> =
-    LazyLock::new(|| make_magics(bishop_occupancy_mask, bishop_attacks_gen, &BISHOP_MAGIC_NUMBERS));
+pub static BISHOP_MAGICS: LazyLock<Vec<MagicBitboard>> = LazyLock::new(|| {
+    make_magics(
+        bishop_occupancy_mask,
+        bishop_attacks_gen,
+        &BISHOP_MAGIC_NUMBERS,
+    )
+});
 pub static ROOK_MAGICS: LazyLock<Vec<MagicBitboard>> =
     LazyLock::new(|| make_magics(rook_occupancy_mask, rook_attacks_gen, &ROOK_MAGIC_NUMBERS));
 
@@ -473,7 +505,8 @@ pub const INTERVENING_SQUARES: [[Bitboard; 64]; 64] = make_intervening_squares()
 
 // The Zobrist tables share one PRNG; make_zobrist_tables draws them in the mandatory order
 // (piece-square, castling rights, en passant). Reordering would change every drawn key.
-const ZOBRIST_TABLES: ([[[ZobristT; 64]; 6]; 2], [ZobristT; 16], [ZobristT; 64]) = make_zobrist_tables();
+const ZOBRIST_TABLES: ([[[ZobristT; 64]; 6]; 2], [ZobristT; 16], [ZobristT; 64]) =
+    make_zobrist_tables();
 pub const PIECE_SQUARE_HASHES: [[[ZobristT; 64]; 6]; 2] = ZOBRIST_TABLES.0;
 pub const CASTLING_RIGHTS_HASHES: [ZobristT; 16] = ZOBRIST_TABLES.1;
 pub const EN_PASSANT_HASHES: [ZobristT; 64] = ZOBRIST_TABLES.2;

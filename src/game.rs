@@ -30,19 +30,19 @@ pub const START_FEN: &str = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq 
 pub struct Game {
     // State variables
     pub transposition_table: TranspositionTable, // The transposition table (shared by all Lazy SMP threads).
-    pub eval_cache: EvalCache,                   // Lockless NNUE evaluation cache (shared by all threads).
-    pub time_control: ChessClock,                // Clock controls for the current game.
-    pub book: OpeningBook,                       // The opening book.
-    pub is_cancel_pending: AtomicBool,           // Shared stop flag: set on timeout, UCI stop, or completion.
-    pub thread_count: i32,                       // Lazy SMP search threads; default from PAWNSTAR_THREADS / hardware.
-    pub move_overhead: i64,                      // Reserved from each hard deadline for GUI/network lag (ms).
-    pub is_pondering: AtomicBool,                // True while a `go ponder` search runs; suppresses time stops.
-    pub ponder_move: AtomicU64,                  // Predicted opponent reply (PV[1]) as Move::bits().
-    pub use_own_book: bool,                      // Whether to consult the built-in opening book (UCI `OwnBook`).
-    pub last_search_node_count: AtomicU64,       // Node count of the most recent search's main thread (for `bench`).
-    pub search_moves: Vec<String>,               // UCI `go searchmoves`: restrict the root search (empty = all).
-    pub positions: Mutex<Vec<Position>>,         // Game position history (grows with the game; no fixed cap).
-    pub nnue_network: nnue::Network,             // NNUE network instance (loaded via EvalFile; read-only in search).
+    pub eval_cache: EvalCache, // Lockless NNUE evaluation cache (shared by all threads).
+    pub time_control: ChessClock, // Clock controls for the current game.
+    pub book: OpeningBook,     // The opening book.
+    pub is_cancel_pending: AtomicBool, // Shared stop flag: set on timeout, UCI stop, or completion.
+    pub thread_count: i32,     // Lazy SMP search threads; default from PAWNSTAR_THREADS / hardware.
+    pub move_overhead: i64,    // Reserved from each hard deadline for GUI/network lag (ms).
+    pub is_pondering: AtomicBool, // True while a `go ponder` search runs; suppresses time stops.
+    pub ponder_move: AtomicU64, // Predicted opponent reply (PV[1]) as Move::bits().
+    pub use_own_book: bool,    // Whether to consult the built-in opening book (UCI `OwnBook`).
+    pub last_search_node_count: AtomicU64, // Node count of the most recent search's main thread (for `bench`).
+    pub search_moves: Vec<String>, // UCI `go searchmoves`: restrict the root search (empty = all).
+    pub positions: Mutex<Vec<Position>>, // Game position history (grows with the game; no fixed cap).
+    pub nnue_network: nnue::Network, // NNUE network instance (loaded via EvalFile; read-only in search).
 }
 
 impl Game {
@@ -72,7 +72,9 @@ impl Game {
     /// clamped to [1, MAX_SEARCH_THREADS]. Read once at construction; the UCI `Threads` option
     /// overrides `thread_count`.
     pub fn compute_default_threads() -> i32 {
-        let hw = std::thread::available_parallelism().map(|n| n.get() as i32).unwrap_or(1);
+        let hw = std::thread::available_parallelism()
+            .map(|n| n.get() as i32)
+            .unwrap_or(1);
         let mut n = hw.clamp(1, MAX_SEARCH_THREADS);
         if let Ok(env) = std::env::var("PAWNSTAR_THREADS") {
             let requested: i32 = env.trim().parse().unwrap_or(0);
@@ -87,7 +89,12 @@ impl Game {
     /// mutex-guarded history cannot; Position is a 160-byte Copy type and no caller is on the
     /// per-node hot path, which uses SearchState's own stack).
     pub fn current_position(&self) -> Position {
-        *self.positions.lock().unwrap().last().expect("position history is never empty")
+        *self
+            .positions
+            .lock()
+            .unwrap()
+            .last()
+            .expect("position history is never empty")
     }
 
     /// Set the board to a position from a FEN (Forsyth Edwards) string, resetting per-game
@@ -148,7 +155,9 @@ impl Game {
         // (reached max depth or a forced mate) before the GUI resolved it, wait here until
         // `ponderhit` clears is_pondering or `stop` sets is_cancel_pending. For a normal
         // (non-ponder) search is_pondering is false, so this is a no-op.
-        while self.is_pondering.load(Ordering::Relaxed) && !self.is_cancel_pending.load(Ordering::Relaxed) {
+        while self.is_pondering.load(Ordering::Relaxed)
+            && !self.is_cancel_pending.load(Ordering::Relaxed)
+        {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         if mv != Move::none() {
@@ -168,15 +177,16 @@ impl Game {
     /// all sharing the transposition table. Returns Move::none() if there are no legal moves.
     pub fn search_root_node(&self) -> Move {
         let game = self; // local alias so the search body reads uniformly through `game`
-        game.ponder_move.store(Move::none().bits(), Ordering::Relaxed);
+        game.ponder_move
+            .store(Move::none().bits(), Ordering::Relaxed);
         // Clear the stop flag (set true by start_thinking's stop_thinking) up front — BEFORE the
         // book / single-move early returns. Otherwise a leftover cancel makes
         // search_thread_entry's ponder-wait exit immediately and emit a premature `bestmove` when
         // `go ponder` lands on a book/forced position (which returns without search).
         game.is_cancel_pending.store(false, Ordering::Relaxed);
         game.last_search_node_count.store(0, Ordering::Relaxed); // stays 0 for book/forced returns
-        // If there is a book move for this position, do not bother with search (unless OwnBook is
-        // disabled). Skip the book when `go searchmoves` restricts the root.
+                                                                 // If there is a book move for this position, do not bother with search (unless OwnBook is
+                                                                 // disabled). Skip the book when `go searchmoves` restricts the root.
         if game.use_own_book && game.search_moves.is_empty() {
             let book_move = game.book.get_move(game.current_position().hash);
             if book_move != Move::none() {
@@ -222,7 +232,8 @@ impl Game {
                 allocated_time = game.time_control.remaining_time / moves_to_go as i64;
                 // Hard budget: up to 2x the soft budget, but never spend into the last second of
                 // our clock, and always allow at least 100 ms.
-                max_search_time = 100i64.max((allocated_time * 2).min(game.time_control.remaining_time - 1000));
+                max_search_time =
+                    100i64.max((allocated_time * 2).min(game.time_control.remaining_time - 1000));
             }
             ClockType::FixedDepth => {} // no time limit; the depth loop bounds the search
             ClockType::FixedTime => {
@@ -240,9 +251,11 @@ impl Game {
         // (budget-from-ponderhit); the budgets are recorded so the conversion can start the real
         // clock from that moment.
         if game.is_pondering.load(Ordering::Relaxed) {
-            game.time_control.start_ponder_search(allocated_time, max_search_time);
+            game.time_control
+                .start_ponder_search(allocated_time, max_search_time);
         } else {
-            game.time_control.start_search(allocated_time, max_search_time);
+            game.time_control
+                .start_search(allocated_time, max_search_time);
         }
         debug_x_clear();
         game.transposition_table.age();
@@ -253,7 +266,15 @@ impl Game {
         for move_index in 0..move_list.size() {
             let mv = move_list[move_index];
             let score = state
-                .search_single_move(START_DEPTH, 0, ALPHA, BETA, mv, &mut shallow_pv, move_index as i32)
+                .search_single_move(
+                    START_DEPTH,
+                    0,
+                    ALPHA,
+                    BETA,
+                    mv,
+                    &mut shallow_pv,
+                    move_index as i32,
+                )
                 .score();
             move_list[move_index].assign_score(score);
         }
@@ -277,7 +298,8 @@ impl Game {
             }
 
             best_move = state.iterative_deepen(move_list.clone(), best_move, 0);
-            game.last_search_node_count.store(state.node_count, Ordering::Relaxed); // main-thread total (for `bench`)
+            game.last_search_node_count
+                .store(state.node_count, Ordering::Relaxed); // main-thread total (for `bench`)
 
             game.is_cancel_pending.store(true, Ordering::Relaxed); // signal helpers to stop
         }); // scope end joins the helpers, as the C++ join loop does

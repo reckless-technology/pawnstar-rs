@@ -31,10 +31,10 @@ pub struct ChessClock {
     base: Instant,
     pub clock_type: ClockType, // The current time-control type.
     pub remaining_time: i64,   // Time left on our clock this period, ms (UCI wtime/btime).
-    pub increment: i64,        // Per-move increment, ms (UCI winc/binc). Parsed but not used by time planning.
-    pub moves_to_go: i32,      // Moves until the next time control (0 = unknown / sudden death).
-    pub depth: i32,            // Target depth when clock_type == FixedDepth.
-    pub max_nodes: u64,        // Node limit for `go nodes` (0 = no limit); checked per-thread in search.
+    pub increment: i64, // Per-move increment, ms (UCI winc/binc). Parsed but not used by time planning.
+    pub moves_to_go: i32, // Moves until the next time control (0 = unknown / sudden death).
+    pub depth: i32,     // Target depth when clock_type == FixedDepth.
+    pub max_nodes: u64, // Node limit for `go nodes` (0 = no limit); checked per-thread in search.
 
     // search_start_time and hard_deadline are mutated mid-search by `ponderhit` (UCI thread) and
     // read every node by the search worker threads, so they are atomic. The budgets are written
@@ -42,8 +42,8 @@ pub struct ChessClock {
     // too — the C++ keeps them plain because C++ has no shared/exclusive borrow distinction.
     search_start_time: AtomicU64, // nanoseconds since base.
     hard_deadline: AtomicU64,     // nanoseconds since base; NO_DEADLINE = no hard stop.
-    allocated_time: AtomicI64,    // Soft time budget for this move, ms (drives between-iteration stops).
-    max_search_time: AtomicI64,   // Hard budget remembered for on_ponderhit, ms.
+    allocated_time: AtomicI64, // Soft time budget for this move, ms (drives between-iteration stops).
+    max_search_time: AtomicI64, // Hard budget remembered for on_ponderhit, ms.
 }
 
 impl ChessClock {
@@ -63,7 +63,9 @@ impl ChessClock {
             allocated_time: AtomicI64::new(0),
             max_search_time: AtomicI64::new(0),
         };
-        clock.search_start_time.store(clock.now_nanos(), Ordering::Relaxed);
+        clock
+            .search_start_time
+            .store(clock.now_nanos(), Ordering::Relaxed);
         clock
     }
 
@@ -83,7 +85,8 @@ impl ChessClock {
         self.max_nodes = 0;
         self.allocated_time.store(0, Ordering::Relaxed);
         self.max_search_time.store(0, Ordering::Relaxed);
-        self.search_start_time.store(self.now_nanos(), Ordering::Relaxed);
+        self.search_start_time
+            .store(self.now_nanos(), Ordering::Relaxed);
         self.hard_deadline.store(NO_DEADLINE, Ordering::Relaxed);
     }
 
@@ -92,7 +95,8 @@ impl ChessClock {
     pub fn start_search(&self, allocated: i64, maximum: i64) {
         self.allocated_time.store(allocated, Ordering::Relaxed);
         self.max_search_time.store(maximum, Ordering::Relaxed);
-        self.search_start_time.store(self.now_nanos(), Ordering::Relaxed);
+        self.search_start_time
+            .store(self.now_nanos(), Ordering::Relaxed);
         self.arm_hard_deadline(maximum);
     }
 
@@ -102,7 +106,8 @@ impl ChessClock {
     pub fn start_ponder_search(&self, allocated: i64, maximum: i64) {
         self.allocated_time.store(allocated, Ordering::Relaxed);
         self.max_search_time.store(maximum, Ordering::Relaxed);
-        self.search_start_time.store(self.now_nanos(), Ordering::Relaxed);
+        self.search_start_time
+            .store(self.now_nanos(), Ordering::Relaxed);
         self.hard_deadline.store(NO_DEADLINE, Ordering::Relaxed);
     }
 
@@ -110,7 +115,8 @@ impl ChessClock {
     /// keeping the work already done. Resets the soft-time origin and arms the hard deadline from
     /// this instant.
     pub fn on_ponderhit(&self) {
-        self.search_start_time.store(self.now_nanos(), Ordering::Relaxed);
+        self.search_start_time
+            .store(self.now_nanos(), Ordering::Relaxed);
         self.arm_hard_deadline(self.max_search_time.load(Ordering::Relaxed));
     }
 

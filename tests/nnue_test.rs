@@ -18,8 +18,9 @@ use pawnstar::position::Position;
 const TOLERANCE: i32 = 2;
 
 fn net_path() -> String {
-    std::env::var("PAWNSTAR_EVALFILE")
-        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/nnue/pawnstar-v12.bin").to_string())
+    std::env::var("PAWNSTAR_EVALFILE").unwrap_or_else(|_| {
+        concat!(env!("CARGO_MANIFEST_DIR"), "/nnue/pawnstar-v12.bin").to_string()
+    })
 }
 
 #[test]
@@ -39,7 +40,10 @@ fn nnue_suite() {
     let reference = match std::fs::read_to_string(reference_file) {
         Ok(r) => r,
         Err(_) => {
-            common::check(false, &format!("NNUE: cannot open reference '{}'", reference_file));
+            common::check(
+                false,
+                &format!("NNUE: cannot open reference '{}'", reference_file),
+            );
             assert_eq!(common::summary("NNUE"), 0);
             return;
         }
@@ -67,7 +71,10 @@ fn nnue_suite() {
         if diff > TOLERANCE {
             common::check(
                 false,
-                &format!("NNUE ref16 {}  ref16={} bullet={} diff={}", fen, got, expected, diff),
+                &format!(
+                    "NNUE ref16 {}  ref16={} bullet={} diff={}",
+                    fen, got, expected, diff
+                ),
             );
         }
         let int8_dev = (net.evaluate_position(&position) - got).abs();
@@ -75,7 +82,10 @@ fn nnue_suite() {
         if int8_dev > INT8_BOUND {
             common::check(
                 false,
-                &format!("NNUE int8 {}  int8 deviates {} cp from ref16 (> {})", fen, int8_dev, INT8_BOUND),
+                &format!(
+                    "NNUE int8 {}  int8 deviates {} cp from ref16 (> {})",
+                    fen, int8_dev, INT8_BOUND
+                ),
             );
         }
     }

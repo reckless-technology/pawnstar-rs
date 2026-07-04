@@ -28,7 +28,11 @@ impl Bitboard {
         let mut result = String::new();
         for y in (0..8).rev() {
             for x in 0..8 {
-                result.push(if self.0 & (1u64 << (x + 8 * y)) != 0 { '1' } else { '0' });
+                result.push(if self.0 & (1u64 << (x + 8 * y)) != 0 {
+                    '1'
+                } else {
+                    '0'
+                });
             }
             result.push('\n');
         }

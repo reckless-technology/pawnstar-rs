@@ -80,8 +80,9 @@ fn walk(state: &mut SearchState, rng: &mut Rng, depth: i32, branch: i32, checks:
 
 #[test]
 fn nnue_incremental_suite() {
-    let net_path = std::env::var("PAWNSTAR_EVALFILE")
-        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/nnue/pawnstar-v12.bin").to_string());
+    let net_path = std::env::var("PAWNSTAR_EVALFILE").unwrap_or_else(|_| {
+        concat!(env!("CARGO_MANIFEST_DIR"), "/nnue/pawnstar-v12.bin").to_string()
+    });
     if !std::path::Path::new(&net_path).exists() {
         common::summary("incremental NNUE: skipped (no net supplied)");
         return;
@@ -89,7 +90,10 @@ fn nnue_incremental_suite() {
     // Load the net into a Game; SearchState then maintains the accumulator incrementally.
     let mut game = Box::new(Game::new());
     if !game.nnue_network.load(&net_path) || !game.nnue_network.loaded {
-        common::check(false, &format!("incremental NNUE: failed to load net '{}'", net_path));
+        common::check(
+            false,
+            &format!("incremental NNUE: failed to load net '{}'", net_path),
+        );
         assert_eq!(common::summary("INCREMENTAL NNUE"), 0);
         return;
     }
@@ -100,10 +104,19 @@ fn nnue_incremental_suite() {
         game.set_position_start();
         let mut state = SearchState::new(&game);
         let mut rng = Rng { state: seed };
-        walk(&mut state, &mut rng, /*depth=*/ 10, /*branch=*/ 2, &mut checks);
+        walk(
+            &mut state,
+            &mut rng,
+            /*depth=*/ 10,
+            /*branch=*/ 2,
+            &mut checks,
+        );
     }
 
-    let failures = common::summary(&format!("INCREMENTAL NNUE: {} checks bit-identical to full refresh", checks));
+    let failures = common::summary(&format!(
+        "INCREMENTAL NNUE: {} checks bit-identical to full refresh",
+        checks
+    ));
     assert_eq!(failures, 0);
     assert!(checks > 0);
 }

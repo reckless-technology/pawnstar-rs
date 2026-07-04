@@ -21,7 +21,10 @@ fn play(position: &Position, coord: &str) -> Position {
     match moves.iter().find(|m| m.to_string() == coord) {
         Some(m) => position.make_move(*m),
         None => {
-            common::check(false, &format!("opening book: test bug - illegal move {}", coord));
+            common::check(
+                false,
+                &format!("opening book: test bug - illegal move {}", coord),
+            );
             *position
         }
     }
@@ -68,7 +71,10 @@ fn opening_book_suite() {
             break;
         }
     }
-    common::check(!ever_played, "questionable move f2f4? must never be returned by GetMove");
+    common::check(
+        !ever_played,
+        "questionable move f2f4? must never be returned by GetMove",
+    );
 
     // The line continued past the '?' move: the reply exf4 is recorded and selectable.
     let reply = book.get_move(hash_after(&["e2e4", "e7e5", "f2f4"]));

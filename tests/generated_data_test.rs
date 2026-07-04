@@ -44,7 +44,10 @@ fn magic_tables_match_cpp() {
     assert_eq!(ROOK_MAGICS[0].shift, 52);
     // Rook on a1 with blockers on a4 and d1 → attacks a2,a3,a4,b1,c1,d1.
     let occ = Bitboard((1u64 << 24) | (1u64 << 3));
-    assert_eq!(pawnstar::attacks::rook_attacks(occ, Square(0)).0, 0x000000000101010e);
+    assert_eq!(
+        pawnstar::attacks::rook_attacks(occ, Square(0)).0,
+        0x000000000101010e
+    );
     // Every square's magic table must be dedup-consistent with the reference generators.
     for sq in 0u8..64 {
         for &m in &[&BISHOP_MAGICS[sq as usize], &ROOK_MAGICS[sq as usize]] {
@@ -71,7 +74,12 @@ fn magic_tables_match_cpp() {
 fn move_bitfield_roundtrips() {
     use pawnstar::constants::Piece;
     // Score sign-extension (23-bit signed field) including negative scores.
-    let mut m = Move::capture(Square::from_str("e1"), Square::from_str("e5"), Piece::Rook, Piece::Pawn);
+    let mut m = Move::capture(
+        Square::from_str("e1"),
+        Square::from_str("e5"),
+        Piece::Rook,
+        Piece::Pawn,
+    );
     for score in [0, 1, -1, 31900, -31900, -1234567, 4194303, -4194304] {
         m.assign_score(score);
         assert_eq!(m.score(), score, "score {score} did not round-trip");
@@ -105,7 +113,12 @@ fn move_bitfield_roundtrips() {
     scored.assign_score(12345);
     assert_eq!(scored, m);
     // to_string with promotion.
-    let p = Move::promotion(Square::from_str("a7"), Square::from_str("a8"), Piece::Queen, Piece::None);
+    let p = Move::promotion(
+        Square::from_str("a7"),
+        Square::from_str("a8"),
+        Piece::Queen,
+        Piece::None,
+    );
     assert_eq!(p.to_string(), "a7a8q");
     assert_eq!(p.promoted(), Piece::Queen);
     assert!(!p.is_quiet());

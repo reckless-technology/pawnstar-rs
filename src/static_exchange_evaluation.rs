@@ -32,7 +32,12 @@ impl SeeBoard {
 /// Determine the swap off value for a capture on a square.
 /// `bb`: bitboards of piece locations; `location`: target square; `color`: color to move;
 /// `piece_on_square`: piece currently standing on the target square.
-pub fn evaluate_swap_off(bb: &mut SeeBoard, location: Square, mut color: Color, mut piece_on_square: Piece) -> i32 {
+pub fn evaluate_swap_off(
+    bb: &mut SeeBoard,
+    location: Square,
+    mut color: Color,
+    mut piece_on_square: Piece,
+) -> i32 {
     // Squares a pawn of each color must stand on to attack location. A white pawn attacks
     // location from the squares a black pawn on location would attack, and vice versa. The
     // relevant mask depends on whose turn it is, so it must be reselected each ply as color
@@ -49,7 +54,11 @@ pub fn evaluate_swap_off(bb: &mut SeeBoard, location: Square, mut color: Color, 
     while ply != 32 {
         // Find the least valuable piece of color which directly attacks location.
         // (The C++ uses `goto FoundAttacker`; the labeled block is its structured equivalent.)
-        let pawn_attacks = if color == Color::White { white_pawn_attacks } else { black_pawn_attacks };
+        let pawn_attacks = if color == Color::White {
+            white_pawn_attacks
+        } else {
+            black_pawn_attacks
+        };
         let attacking_pieces = bb.colors[color.index()];
         let (capturing_piece, mut attackers) = 'found: {
             let a = pawn_attacks & attacking_pieces & bb.pieces[Piece::Pawn.index()];
@@ -128,8 +137,10 @@ pub fn see_attackers_to(bb: &SeeBoard, location: Square, color: Color) -> Bitboa
     }) & bb.pieces[Piece::Pawn.index()];
     result |= (KNIGHT_ATTACKS[location.index()] & bb.pieces[Piece::Knight.index()])
         | (KING_ATTACKS[location.index()] & bb.pieces[Piece::King.index()]);
-    result |= rook_attacks(occupied, location) & (bb.pieces[Piece::Rook.index()] | bb.pieces[Piece::Queen.index()]);
-    result |= bishop_attacks(occupied, location) & (bb.pieces[Piece::Bishop.index()] | bb.pieces[Piece::Queen.index()]);
+    result |= rook_attacks(occupied, location)
+        & (bb.pieces[Piece::Rook.index()] | bb.pieces[Piece::Queen.index()]);
+    result |= bishop_attacks(occupied, location)
+        & (bb.pieces[Piece::Bishop.index()] | bb.pieces[Piece::Queen.index()]);
     result &= bb.colors[color.index()];
     result
 }
@@ -149,13 +160,15 @@ pub fn evaluate_static_exchange_reference(src_position: &Position, mv: Move) -> 
     let promoted = mv.promoted();
     if promoted != Piece::None {
         return (
-            PIECE_VALUES[captured.index()] + PIECE_VALUES[promoted.index()] - PIECE_VALUES[Piece::Pawn.index()]
+            PIECE_VALUES[captured.index()] + PIECE_VALUES[promoted.index()]
+                - PIECE_VALUES[Piece::Pawn.index()]
                 - evaluate_swap_off(&mut bb, mv.to(), dst_position.color_to_move, mv.promoted()),
             is_checking,
         );
     }
     (
-        PIECE_VALUES[captured.index()] - evaluate_swap_off(&mut bb, mv.to(), dst_position.color_to_move, piece),
+        PIECE_VALUES[captured.index()]
+            - evaluate_swap_off(&mut bb, mv.to(), dst_position.color_to_move, piece),
         is_checking,
     )
 }
@@ -180,9 +193,21 @@ pub fn evaluate_static_exchange(src_position: &Position, mv: Move) -> (i32, bool
     let is_ep = mv.type_() == MoveType::EpCapture;
     // En-passant captures the pawn on `to`'s file at `from`'s rank; otherwise the captured piece
     // sits on `to` (None for a non-capturing promotion).
-    let captured_square = if is_ep { Square::from_file_rank(to.file(), from.rank()) } else { to };
-    let captured = if is_ep { Piece::Pawn } else { src_position.squares[to.index()] };
-    let piece_on_to = if promoted != Piece::None { promoted } else { mover };
+    let captured_square = if is_ep {
+        Square::from_file_rank(to.file(), from.rank())
+    } else {
+        to
+    };
+    let captured = if is_ep {
+        Piece::Pawn
+    } else {
+        src_position.squares[to.index()]
+    };
+    let piece_on_to = if promoted != Piece::None {
+        promoted
+    } else {
+        mover
+    };
 
     // Apply only the capturing move to a working board (no Zobrist/castling/squares recompute).
     let mut bb = SeeBoard::new(src_position);
@@ -198,7 +223,8 @@ pub fn evaluate_static_exchange(src_position: &Position, mv: Move) -> (i32, bool
     bb.colors[color.index()] ^= from_bb;
     bb.pieces[piece_on_to.index()] ^= to_bb; // ...and place it (promoted type if promoting) on `to`
     bb.colors[color.index()] ^= to_bb;
-    bb.pieces[Piece::None.index()] = bb.colors[Color::White.index()] | bb.colors[Color::Black.index()]; // refreshed occupancy
+    bb.pieces[Piece::None.index()] =
+        bb.colors[Color::White.index()] | bb.colors[Color::Black.index()]; // refreshed occupancy
 
     // Check = the side that just moved now attacks the opposing king (matches Position::checkers).
     let enemy_king = (bb.pieces[Piece::King.index()] & bb.colors[enemy.index()]).lsb();
@@ -206,7 +232,8 @@ pub fn evaluate_static_exchange(src_position: &Position, mv: Move) -> (i32, bool
 
     if promoted != Piece::None {
         return (
-            PIECE_VALUES[captured.index()] + PIECE_VALUES[promoted.index()] - PIECE_VALUES[Piece::Pawn.index()]
+            PIECE_VALUES[captured.index()] + PIECE_VALUES[promoted.index()]
+                - PIECE_VALUES[Piece::Pawn.index()]
                 - evaluate_swap_off(&mut bb, to, enemy, promoted),
             is_checking,
         );

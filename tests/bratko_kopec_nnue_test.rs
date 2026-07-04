@@ -58,13 +58,19 @@ const CASES: [BkCase; 24] = [
 
 /// Format a case's non-empty accepted moves as a space-separated string.
 fn accepted_moves_string(tc: &BkCase) -> String {
-    tc.moves.iter().filter(|m| !m.is_empty()).copied().collect::<Vec<_>>().join(" ")
+    tc.moves
+        .iter()
+        .filter(|m| !m.is_empty())
+        .copied()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[test]
 fn bratko_kopec_nnue_suite() {
-    let net_path = std::env::var("PAWNSTAR_EVALFILE")
-        .unwrap_or_else(|_| concat!(env!("CARGO_MANIFEST_DIR"), "/nnue/pawnstar-v12.bin").to_string());
+    let net_path = std::env::var("PAWNSTAR_EVALFILE").unwrap_or_else(|_| {
+        concat!(env!("CARGO_MANIFEST_DIR"), "/nnue/pawnstar-v12.bin").to_string()
+    });
     if !std::path::Path::new(&net_path).exists() {
         common::summary("Bratko-Kopec NNUE: skipped (no net supplied)");
         return;
@@ -83,7 +89,10 @@ fn bratko_kopec_nnue_suite() {
         game.thread_count = 1;
     }
     if !game.nnue_network.load(&net_path) || !game.nnue_network.loaded {
-        common::check(false, &format!("Bratko-Kopec NNUE: failed to load net '{}'", net_path));
+        common::check(
+            false,
+            &format!("Bratko-Kopec NNUE: failed to load net '{}'", net_path),
+        );
         assert_eq!(common::summary("BRATKO-KOPEC NNUE"), 0);
         return;
     }
