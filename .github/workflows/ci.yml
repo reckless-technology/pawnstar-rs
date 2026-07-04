@@ -1,0 +1,38 @@
+# CI mirrors the C++ repo's gates: a build-and-test job (all suites, including the bench golden
+# that locks bit-exact parity with the C++ engine, and the uci_test.sh shell suite) and a format
+# job (the whole tree must stay cargo-fmt-clean, like the C++ clang-format gate).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so build.rs's `git rev-list --count` isn't undercounted
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build (release)
+        run: cargo build --release --bins
+      - name: Test (release, includes bench golden + uci shell suite)
+        run: cargo test --release
+      - name: Bench determinism signature
+        run: |
+          nodes=$(./target/release/pawnstar <<< $'bench\nquit' | grep -Eo '^[0-9]+ nodes' | grep -Eo '[0-9]+')
+          echo "bench: $nodes nodes"
+          test "$nodes" = "6888983"
+
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --check

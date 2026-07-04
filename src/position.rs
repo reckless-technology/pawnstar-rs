@@ -17,6 +17,7 @@ use crate::square::Square;
 /// the rules of chess. Immutable after construction: `make_move` / `make_null_move` return a new
 /// Position by value.
 #[derive(Clone, Copy)]
+#[repr(C)] // C++ field order and layout; sizeof(Position) == 160 as the C++ static_asserts.
 pub struct Position {
     // State variables
     pub pieces: [Bitboard; 7], // Bitboards indexed by Piece (index 0 = occupied squares)
@@ -32,6 +33,8 @@ pub struct Position {
     pub is_null_move: bool,    // Whether the last move was a null (pass) move.
     pub color_to_move: Color,  // Side to move.
 }
+
+const _: () = assert!(core::mem::size_of::<Position>() == 160);
 
 impl Default for Position {
     /// The C++ `Position{}` value-initialization: everything zero / empty.
@@ -55,6 +58,7 @@ impl Default for Position {
 
 impl Position {
     /// Generate all legal moves.
+    /// (#[inline] so cross-crate callers construct the 2 KB MoveList in place, as C++ NRVO does.)
     #[inline]
     pub fn generate_legal_moves(&self) -> MoveList {
         if self.color_to_move == Color::White {
@@ -654,13 +658,31 @@ impl Position {
         } else {
             position.en_passant_square = Square::from_str(ep_square);
         }
-        // Half move clock - optional
-        if let Some(hmc) = fields.next().and_then(|s| s.parse::<i32>().ok()) {
-            position.reversible_move_count = hmc as u8;
+        // Half move clock and full move number - optional. C++ reads them through one shared
+        // istringstream: a failed halfmove extraction assigns 0 AND poisons the stream, so the
+        // fullmove field is then never read; extraction itself is leading-digit (atoi-like).
+        let leading_digits = |s: &str| -> Option<i32> {
+            let n = s.bytes().take_while(u8::is_ascii_digit).count();
+            if n == 0 {
+                None
+            } else {
+                s[..n].parse().ok()
+            }
+        };
+        let mut stream_ok = true;
+        if let Some(tok) = fields.next() {
+            match leading_digits(tok) {
+                Some(hmc) => position.reversible_move_count = hmc as u8,
+                None => {
+                    position.reversible_move_count = 0;
+                    stream_ok = false;
+                }
+            }
         }
-        // Full move number - optional
-        if let Some(fmn) = fields.next().and_then(|s| s.parse::<i32>().ok()) {
-            position.full_move_count = (fmn as u8).wrapping_sub(1);
+        if stream_ok {
+            if let Some(fmn) = fields.next().and_then(leading_digits) {
+                position.full_move_count = (fmn as u8).wrapping_sub(1);
+            }
         }
         position.hash = position.compute_hash();
         // Is this position check?

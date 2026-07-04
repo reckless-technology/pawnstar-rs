@@ -294,13 +294,20 @@ impl Network {
     /// unloaded. Reads the file into memory and defers to load_from_memory.
     pub fn load(&mut self, path: &str) -> bool {
         self.loaded = false;
-        let buffer = match std::fs::read(path) {
-            Ok(b) => b,
+        // Distinguish open failure from a mid-read I/O error, like the C++ (ifstream open vs read).
+        let mut file = match std::fs::File::open(path) {
+            Ok(f) => f,
             Err(_) => {
                 eprintln!("info string NNUE: cannot open net file '{}'", path);
                 return false;
             }
         };
+        let mut buffer = Vec::new();
+        use std::io::Read;
+        if file.read_to_end(&mut buffer).is_err() {
+            eprintln!("info string NNUE: error reading net file '{}'", path);
+            return false;
+        }
         self.load_from_memory(&buffer, path)
     }
 

@@ -77,7 +77,7 @@ impl Game {
             .unwrap_or(1);
         let mut n = hw.clamp(1, MAX_SEARCH_THREADS);
         if let Ok(env) = std::env::var("PAWNSTAR_THREADS") {
-            let requested: i32 = env.trim().parse().unwrap_or(0);
+            let requested = crate::input_handling::atoi(&env) as i32; // C++ std::atoi semantics
             if requested > 0 {
                 n = requested.clamp(1, MAX_SEARCH_THREADS);
             }

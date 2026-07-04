@@ -36,10 +36,20 @@ fn main() {
     }
 
     let header = expected_net_header().to_bytes();
-    let mut out = Vec::with_capacity(header.len() + payload.len());
-    out.extend_from_slice(&header);
-    out.extend_from_slice(&payload);
-    if std::fs::write(&args[2], &out).is_err() {
+    // Distinguish open-for-write from write failure, like the C++ (ofstream open vs write).
+    let mut out = match std::fs::File::create(&args[2]) {
+        Ok(f) => f,
+        Err(_) => {
+            eprintln!("stamp_net: cannot write '{}'", args[2]);
+            std::process::exit(1);
+        }
+    };
+    use std::io::Write;
+    if out
+        .write_all(&header)
+        .and_then(|()| out.write_all(&payload))
+        .is_err()
+    {
         eprintln!("stamp_net: write to '{}' failed", args[2]);
         std::process::exit(1);
     }

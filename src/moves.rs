@@ -110,7 +110,9 @@ pub struct Move {
 }
 
 /// Equality compares from, to, piece, captured, type fields (22 identity bits) only,
-/// exactly like the C++ `operator==`.
+/// exactly like the C++ `operator==`. (The C++ also defines `operator<` over the raw value "to
+/// put moves into a set"; it is unused in the current engine and deliberately unported — a Rust
+/// `Ord` over the raw bits would be inconsistent with this identity-masked `Eq`.)
 impl PartialEq for Move {
     #[inline(always)]
     fn eq(&self, that: &Move) -> bool {

@@ -16,6 +16,21 @@ use crate::search_state::{evaluate_position, SearchState};
 use crate::uci_println;
 use crate::version::version_string;
 
+/// C++ `std::atoi` semantics: skip leading whitespace, optional sign, then parse leading digits;
+/// 0 when no digits ("64abc" -> 64, "abc" -> 0). The C++ parses every numeric option/env/bench
+/// argument this way (and `go` values with `std::stoi`, which differs only by throwing on no
+/// digits — where this returns 0, the documented deviation).
+pub fn atoi(s: &str) -> i64 {
+    let t = s.trim_start();
+    let (sign, rest) = match t.as_bytes().first() {
+        Some(b'-') => (-1i64, &t[1..]),
+        Some(b'+') => (1, &t[1..]),
+        _ => (1, t),
+    };
+    let digits: &str = &rest[..rest.bytes().take_while(u8::is_ascii_digit).count()];
+    sign * digits.parse::<i64>().unwrap_or(0)
+}
+
 /// Pointer to a command handler taking the engine and the command's argument list.
 pub type HandlerFn = fn(&mut Engine, &[String]);
 
@@ -129,21 +144,19 @@ fn handle_setoption(engine: &mut Engine, args: &[String]) {
         }
     }
     let game = engine.game_mut();
-    // atoi semantics: 0 on garbage (the C++ uses std::atoi here).
-    let atoi = |s: &str| s.trim().parse::<i32>().unwrap_or(0);
     if name == "EvalFile" {
         game.nnue_network.load(&value);
         game.eval_cache.clear(); // cached evals belong to the previous net
     } else if name == "Hash" {
-        let mb = atoi(&value).clamp(1, 4096);
+        let mb = (atoi(&value) as i32).clamp(1, 4096);
         game.transposition_table.resize(mb as usize);
     } else if name == "Threads" {
-        game.thread_count = atoi(&value).clamp(1, MAX_SEARCH_THREADS);
+        game.thread_count = (atoi(&value) as i32).clamp(1, MAX_SEARCH_THREADS);
     } else if name == "Clear Hash" {
         // a button: no value, just empty the transposition table
         game.transposition_table.clear();
     } else if name == "Move Overhead" {
-        game.move_overhead = atoi(&value).clamp(0, 5000) as i64;
+        game.move_overhead = atoi(&value).clamp(0, 5000);
     } else if name == "OwnBook" {
         game.use_own_book = value == "true";
     }
@@ -192,7 +205,7 @@ pub const BENCH_DEPTH: i32 = 13;
 /// last bench position (run it standalone).
 fn handle_bench(engine: &mut Engine, args: &[String]) {
     let depth: i32 = if args.len() > 1 {
-        args[1].trim().parse().unwrap_or(0) // atoi semantics
+        atoi(&args[1]) as i32
     } else {
         BENCH_DEPTH
     };
@@ -306,9 +319,9 @@ fn handle_go(engine: &mut Engine, args: &[String]) {
                 // else: ignore unrecognised tokens
             }
             State::AwaitValue => {
-                // (The C++ uses std::stoi, which throws on garbage; parse-or-0 is strictly more
-                // robust and differs only on malformed GUI input.)
-                let value: i64 = token.trim().parse().unwrap_or(0);
+                // (The C++ uses std::stoi, which throws on garbage where atoi yields 0; this
+                // differs only on malformed GUI input — the documented deviation.)
+                let value: i64 = atoi(token);
                 let color_to_move = game.current_position().color_to_move;
                 if (pending == "wtime" && color_to_move == Color::White)
                     || (pending == "btime" && color_to_move == Color::Black)
