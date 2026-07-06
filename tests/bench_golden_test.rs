@@ -18,24 +18,24 @@ use pawnstar::input_handling::{BENCH_DEPTH, BENCH_FENS};
 
 /// (best move, node count) per bench position — C++ reference at depth 13, single-threaded.
 const GOLDEN: [(&str, u64); 16] = [
-    ("d6d1", 13940),
-    ("d4d5", 197215),
-    ("f8g8", 1044645),
-    ("e5e6", 628220),
-    ("c3d5", 414541),
-    ("g5g6", 157589),
-    ("f3g3", 757585),
-    ("f4f5", 130854),
-    ("f1d3", 755288),
-    ("c6e5", 690401),
-    ("f2f4", 781362),
-    ("d7f5", 335826),
-    ("b2b4", 347687),
-    ("d1d2", 264484),
-    ("g4g7", 183351),
-    ("d2e4", 185995),
+    ("d6d1", 13710),
+    ("d4d5", 147492),
+    ("f8g8", 1230595),
+    ("e5e6", 582804),
+    ("c3d5", 410154),
+    ("g5g6", 180915),
+    ("d1c1", 911931),
+    ("f4f5", 170315),
+    ("f1b5", 686447),
+    ("f6d7", 552912),
+    ("f2f4", 514815),
+    ("d7f5", 261314),
+    ("b2b4", 324298),
+    ("d1d2", 271979),
+    ("g4g7", 119154),
+    ("d2e4", 222619),
 ];
-const GOLDEN_TOTAL: u64 = 6_888_983;
+const GOLDEN_TOTAL: u64 = 6_601_454;
 
 #[test]
 fn bench_matches_cpp_golden_signature() {

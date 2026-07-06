@@ -4,7 +4,7 @@ use crate::chess_clock::ClockType;
 use crate::constants::*;
 use crate::game::Game;
 use crate::generated_data::ZobristT;
-use crate::history_table::HistoryTable;
+use crate::history_table::{history_bonus, HistoryTable};
 use crate::moves::{sort_moves, Move, MoveList, MoveType, NodeType};
 use crate::nnue;
 use crate::position::Position;
@@ -135,15 +135,51 @@ impl<'a> SearchState<'a> {
         self.countermoves[prev.piece_to() as usize] == mv
     }
 
-    /// Reward a quiet `mv` that was good (raised alpha or cut) as a follow-up to `prev`.
-    /// Captures are ignored (they are ordered by SEE, not history). Saturating count.
+    /// Credit (bonus > 0) or debit (bonus < 0) the 1-ply continuation-history entry for playing `mv`
+    /// after `prev`, with the same gravity as the butterfly table. Non-quiet moves are skipped
+    /// (captures order by SEE). The i16 entry is loaded into an i32, gravity-updated, then stored
+    /// back — the gravity bound (+/- HISTORY_MAX) keeps it within i16 range.
     #[inline]
-    pub fn record_continuation_history(&mut self, prev: Move, mv: Move) {
-        if mv.is_quiet() {
-            let c = &mut self.continuation_history
-                [(prev.piece_to() as usize) * CONT_KEYS + mv.piece_to() as usize];
-            if *c < 16384 {
-                *c += 1;
+    pub fn apply_continuation_history_bonus(&mut self, prev: Move, mv: Move, bonus: i32) {
+        if !mv.is_quiet() {
+            return;
+        }
+        let idx = (prev.piece_to() as usize) * CONT_KEYS + mv.piece_to() as usize;
+        let mut e = self.continuation_history[idx] as i32;
+        crate::history_table::apply_gravity(&mut e, bonus);
+        self.continuation_history[idx] = e as i16;
+    }
+
+    /// Credit `mv` (which raised alpha, or caused a beta cutoff when `is_cutoff`) into the
+    /// move-ordering heuristics with a depth-weighted gravity bonus: the butterfly history and
+    /// continuation history for `mv`. On a beta cutoff it additionally (a) debits every other quiet
+    /// move that was searched at this node but failed (the malus, over `quiets_tried`) and (b) makes
+    /// a quiet `mv` the killer at `ply` and the countermove to `prev`. Ported verbatim from the Go
+    /// engine's recordGood.
+    pub fn record_good(
+        &mut self,
+        ply: i32,
+        depth: i32,
+        prev: Move,
+        mv: Move,
+        is_cutoff: bool,
+        quiets_tried: &[Move],
+    ) {
+        let c = self.current_position().color_to_move;
+        let bonus = history_bonus(depth);
+        self.history.apply_bonus(c, mv, bonus);
+        self.apply_continuation_history_bonus(prev, mv, bonus);
+        if is_cutoff {
+            for &quiet in quiets_tried {
+                if quiet != mv {
+                    // identity compare (Move == masks score bits), so the cutoff move is skipped
+                    self.history.apply_bonus(c, quiet, -bonus);
+                    self.apply_continuation_history_bonus(prev, quiet, -bonus);
+                }
+            }
+            if mv.is_quiet() {
+                self.record_killer(ply, mv);
+                self.record_countermove(prev, mv);
             }
         }
     }
@@ -267,10 +303,12 @@ impl<'a> SearchState<'a> {
                 // countermove: best quiet refutation to the previous move
                 sort = COUNTERMOVE_SCORE;
             } else {
-                // quiet move: main history + 1-ply continuation history, clamped below countermove
+                // quiet move: main history + 1-ply continuation history, clamped below countermove.
+                // History is SIGNED (the malus drives entries negative); clamp only the HIGH side so
+                // negative scores pass through — an unsigned clamp/wrap here would be catastrophic.
                 let h = self.history.get_count(position.color_to_move, *mv)
-                    + self.continuation_hist_score(prev_move, *mv) as u32;
-                sort = h.min(MAX_QUIET as u32) as i32;
+                    + self.continuation_hist_score(prev_move, *mv);
+                sort = h.min(MAX_QUIET);
             }
             mv.assign_score(sort);
         }
@@ -534,6 +572,14 @@ impl<'a> SearchState<'a> {
         let mut best_move = Move::none();
         let mut best_score = ALPHA;
         let mut has_raised_alpha = false;
+
+        // quiets_tried collects the quiet moves searched at this node (TT move included) so a later
+        // beta cutoff can penalise the ones that failed (the history malus in record_good). Backed by
+        // a stack array to avoid a per-node heap allocation; capped at 64 (deeper is rare and the tail
+        // matters least). The cutoff move is in the list and is skipped inside record_good.
+        let mut quiets_buf = [Move::none(); 64];
+        let mut quiets_len: usize = 0;
+
         if let Some(t) = &transposition {
             if t.mv != Move::none() {
                 increment!("table move");
@@ -556,14 +602,12 @@ impl<'a> SearchState<'a> {
                             depth,
                             NodeType::Cut,
                         ));
-                    let color = self.current_position().color_to_move;
-                    self.history.record_good_move(color, t.mv);
-                    self.record_continuation_history(prev_move, t.mv);
-                    if t.mv.is_quiet() {
-                        self.record_killer(ply, t.mv);
-                        self.record_countermove(prev_move, t.mv);
-                    }
+                    self.record_good(ply, depth, prev_move, t.mv, true, &quiets_buf[..quiets_len]);
                     return score;
+                }
+                if t.mv.is_quiet() && quiets_len < 64 {
+                    quiets_buf[quiets_len] = t.mv;
+                    quiets_len += 1;
                 }
                 best_score = score;
                 if score > alpha {
@@ -571,9 +615,7 @@ impl<'a> SearchState<'a> {
                     alpha = score;
                     has_raised_alpha = true;
                     copy_variation(parent_pv, &pv, t.mv); // capture the PV now, while pv holds THIS move's line
-                    let color = self.current_position().color_to_move;
-                    self.history.record_good_move(color, t.mv);
-                    self.record_continuation_history(prev_move, t.mv);
+                    self.record_good(ply, depth, prev_move, t.mv, false, &quiets_buf[..quiets_len]);
                 }
             }
         }
@@ -631,6 +673,13 @@ impl<'a> SearchState<'a> {
                 }
             }
 
+            // Record this quiet move as tried before searching it, so a cutoff by a later sibling
+            // penalises it (the eventual cutoff move is excluded inside record_good).
+            if mv.is_quiet() && quiets_len < 64 {
+                quiets_buf[quiets_len] = mv;
+                quiets_len += 1;
+            }
+
             pv.clear(); // see TT-move note: clear so a non-PV-node child leaves no stale tail in pv
             let mut score = self
                 .search_single_move(lmr_depth, ply, alpha, beta, mv, &mut pv, move_index as i32)
@@ -655,13 +704,7 @@ impl<'a> SearchState<'a> {
                         depth,
                         NodeType::Cut,
                     ));
-                let color = self.current_position().color_to_move;
-                self.history.record_good_move(color, mv);
-                self.record_continuation_history(prev_move, mv);
-                if mv.is_quiet() {
-                    self.record_killer(ply, mv);
-                    self.record_countermove(prev_move, mv);
-                }
+                self.record_good(ply, depth, prev_move, mv, true, &quiets_buf[..quiets_len]);
                 return score;
             }
             if score > best_score {
@@ -673,9 +716,7 @@ impl<'a> SearchState<'a> {
                     alpha = score;
                     has_raised_alpha = true;
                     copy_variation(parent_pv, &pv, mv); // capture the PV now, while pv holds THIS move's line
-                    let color = self.current_position().color_to_move;
-                    self.history.record_good_move(color, mv);
-                    self.record_continuation_history(prev_move, mv);
+                    self.record_good(ply, depth, prev_move, mv, false, &quiets_buf[..quiets_len]);
                 }
             }
         }
@@ -693,9 +734,7 @@ impl<'a> SearchState<'a> {
                     depth,
                     NodeType::Pv,
                 ));
-            let color = self.current_position().color_to_move;
-            self.history.record_good_move(color, best_move);
-            self.record_continuation_history(prev_move, best_move);
+            self.record_good(ply, depth, prev_move, best_move, false, &quiets_buf[..quiets_len]);
             // parent_pv was already set, with the correct line, at the alpha-raise above.
         } else {
             // Searched all moves without raising alpha: all-node.
