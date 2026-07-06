@@ -615,7 +615,14 @@ impl<'a> SearchState<'a> {
                     alpha = score;
                     has_raised_alpha = true;
                     copy_variation(parent_pv, &pv, t.mv); // capture the PV now, while pv holds THIS move's line
-                    self.record_good(ply, depth, prev_move, t.mv, false, &quiets_buf[..quiets_len]);
+                    self.record_good(
+                        ply,
+                        depth,
+                        prev_move,
+                        t.mv,
+                        false,
+                        &quiets_buf[..quiets_len],
+                    );
                 }
             }
         }
@@ -734,7 +741,14 @@ impl<'a> SearchState<'a> {
                     depth,
                     NodeType::Pv,
                 ));
-            self.record_good(ply, depth, prev_move, best_move, false, &quiets_buf[..quiets_len]);
+            self.record_good(
+                ply,
+                depth,
+                prev_move,
+                best_move,
+                false,
+                &quiets_buf[..quiets_len],
+            );
             // parent_pv was already set, with the correct line, at the alpha-raise above.
         } else {
             // Searched all moves without raising alpha: all-node.
