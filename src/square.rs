@@ -18,10 +18,24 @@ impl Square {
     }
 
     /// Construct from a square name, e.g. "e4". (C++ `Square(const char *str)`.)
+    ///
+    /// Total on any input: the en-passant field of `Position::from_string` is untrusted GUI text, so
+    /// a short or malformed name must not panic (`b[1]` on a one-character string) nor produce an
+    /// off-board index (a garbage name used to underflow into a square >= 64, which then indexed one
+    /// past the 64-entry en-passant hash table). Anything that is not a well-formed square yields
+    /// `Square(0)` — the no-square sentinel, i.e. "no en-passant target", the same as a "-" field.
     #[inline(always)]
     pub const fn from_str(s: &str) -> Square {
         let b = s.as_bytes();
-        Square((b[0] | 0x20) - b'a' + 8 * (b[1] - b'1'))
+        if b.len() < 2 {
+            return Square(0);
+        }
+        let file = (b[0] | 0x20).wrapping_sub(b'a');
+        let rank = b[1].wrapping_sub(b'1');
+        if file > 7 || rank > 7 {
+            return Square(0);
+        }
+        Square(file + 8 * rank)
     }
 
     /// File on board (0 thru 7 -> a thru h).

@@ -4,6 +4,7 @@ use crate::attacks::{bishop_attacks, rook_attacks, PIECE_ATTACKERS, PIECE_ATTACK
 use crate::bitboard::{Bitboard, NO_SQUARES, RANK_1, RANK_4, RANK_5, RANK_8, WHITE_SQUARES};
 use crate::castling_rights::CastlingRights;
 use crate::constants::{enemy_of, Color, Piece};
+use crate::game::START_FEN;
 use crate::generated_data::{
     ZobristT, BLACK_MOVE_HASH, EAST_WEST, EN_PASSANT_HASHES, INTERVENING_SQUARES, KING_ATTACKS,
     KNIGHT_ATTACKS, PAWN_ATTACKS_BLACK, PAWN_ATTACKS_WHITE, PIECE_SQUARE_HASHES,
@@ -598,12 +599,40 @@ impl Position {
         position
     }
 
-    /// Construct a position from a Forsyth-Edwards (FEN) string.
+    /// Construct a position from a Forsyth-Edwards (FEN) string, falling back to the start position
+    /// if the FEN does not describe a position the engine can represent.
+    ///
+    /// Malformed input must not panic: the UCI layer feeds untrusted GUI input straight in here, and
+    /// an engine that crashes mid-game forfeits it. The sharp case is a FEN missing a king (e.g.
+    /// `position fen 8/8`): `king_location` is the lsb of an empty king bitboard, i.e. 64, which
+    /// indexes one past every 64-entry attack table — so `attacks_to` panicked here at construction,
+    /// and move generation would panic later for the same reason. A position without both kings is
+    /// not legal chess and is not representable, so reject it outright rather than carry a landmine
+    /// forward.
     pub fn from_string(fen_string: &str) -> Position {
+        let position = Position::from_fen_fields(fen_string.split_whitespace());
+        if position.has_both_kings() {
+            position
+        } else {
+            Position::from_fen_fields(START_FEN.split_whitespace())
+        }
+    }
+
+    /// Whether the position has a king for each side — the minimum for it to be a legal,
+    /// representable chess position (see `from_string`).
+    pub fn has_both_kings(&self) -> bool {
+        let kings = self.pieces[Piece::King.index()];
+        (kings & self.colors[Color::White.index()]).is_not_empty()
+            && (kings & self.colors[Color::Black.index()]).is_not_empty()
+    }
+
+    /// Parse the whitespace-split fields of a FEN. Tolerates any truncation (every field past the
+    /// board is optional and length-guarded) and returns a kingless position for input it cannot
+    /// parse, which `from_string` treats as "invalid, use the start position".
+    fn from_fen_fields<'a>(mut fields: impl Iterator<Item = &'a str>) -> Position {
         let mut position = Position::default();
         const WHITE_PIECE_NAMES: &str = "PNBRQK";
         const BLACK_PIECE_NAMES: &str = "pnbrqk";
-        let mut fields = fen_string.split_whitespace();
         // Pieces on the board
         let pieces = fields.next().unwrap_or("");
         let mut x: i32 = 0;
@@ -614,30 +643,26 @@ impl Position {
                 y -= 1;
                 continue;
             }
-            if ('1'..='8').contains(&c) {
-                x += c as i32 - '0' as i32;
+            if ('0'..='8').contains(&c) {
+                x += c as i32 - '0' as i32; // '0' is a no-op skip: some non-standard FENs emit it
                 continue;
             }
-            if let Some(a) = WHITE_PIECE_NAMES.find(c) {
-                let piece = Piece::from_u8(a as u8 + 1);
-                position.add_piece(
-                    Color::White,
-                    piece,
-                    Square::from_file_rank(x as u8, y as u8),
-                );
-                x += 1;
-                continue;
+            // The board field is untrusted, so every placement is validated: an unrecognised piece
+            // letter, or a file/rank that has run off the board, aborts the parse and returns a
+            // kingless position (which from_string rejects in favour of the start position).
+            // Without this, `position fen garbage` walked x past 7 and indexed a 64-entry table out
+            // of range.
+            let (color, name_index) = match (WHITE_PIECE_NAMES.find(c), BLACK_PIECE_NAMES.find(c)) {
+                (Some(a), _) => (Color::White, a),
+                (_, Some(a)) => (Color::Black, a),
+                _ => return Position::default(), // unparseable board
+            };
+            if x > 7 || y < 0 {
+                return Position::default(); // ran off the board
             }
-            if let Some(a) = BLACK_PIECE_NAMES.find(c) {
-                let piece = Piece::from_u8(a as u8 + 1);
-                position.add_piece(
-                    Color::Black,
-                    piece,
-                    Square::from_file_rank(x as u8, y as u8),
-                );
-                x += 1;
-                continue;
-            }
+            let piece = Piece::from_u8(name_index as u8 + 1);
+            position.add_piece(color, piece, Square::from_file_rank(x as u8, y as u8));
+            x += 1;
         }
         // Side to move
         let color_to_move = fields.next().unwrap_or("w");
@@ -685,10 +710,14 @@ impl Position {
             }
         }
         position.hash = position.compute_hash();
-        // Is this position check?
-        let color = position.color_to_move;
-        position.checkers =
-            position.attacks_to(position.king_location[color.index()], enemy_of(color));
+        // Is this position check? Guarded: king_location on an empty king bitboard is lsb(0) = 64,
+        // and attacks_to would index one past its 64-entry tables. from_string discards any kingless
+        // result anyway, so leaving checkers empty here is fine.
+        if position.has_both_kings() {
+            let color = position.color_to_move;
+            position.checkers =
+                position.attacks_to(position.king_location[color.index()], enemy_of(color));
+        }
         position
     }
 

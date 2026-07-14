@@ -34,11 +34,19 @@ pub struct Game {
     pub time_control: ChessClock, // Clock controls for the current game.
     pub book: OpeningBook,     // The opening book.
     pub is_cancel_pending: AtomicBool, // Shared stop flag: set on timeout, UCI stop, or completion.
-    pub thread_count: i32,     // Lazy SMP search threads; default from PAWNSTAR_THREADS / hardware.
-    pub move_overhead: i64,    // Reserved from each hard deadline for GUI/network lag (ms).
+    // is_stop_requested means specifically "the GUI asked us to stop" (`stop` / `quit`, or a
+    // hard-deadline expiry) — as distinct from is_cancel_pending, which ALSO means "the main thread
+    // is done, helpers wind up" and is therefore set by the search itself at the end of every root
+    // search. Conflating the two is what broke pondering: the ponder-wait in search_thread_entry
+    // cannot key off is_cancel_pending, because a search that finished on its own leaves it set.
+    // Only the UCI thread ever writes this flag; the search threads never do, so it cannot be
+    // clobbered by a search that ends concurrently with a `stop`.
+    pub is_stop_requested: AtomicBool,
+    pub thread_count: i32, // Lazy SMP search threads; default from PAWNSTAR_THREADS / hardware.
+    pub move_overhead: i64, // Reserved from each hard deadline for GUI/network lag (ms).
     pub is_pondering: AtomicBool, // True while a `go ponder` search runs; suppresses time stops.
     pub ponder_move: AtomicU64, // Predicted opponent reply (PV[1]) as Move::bits().
-    pub use_own_book: bool,    // Whether to consult the built-in opening book (UCI `OwnBook`).
+    pub use_own_book: bool, // Whether to consult the built-in opening book (UCI `OwnBook`).
     pub last_search_node_count: AtomicU64, // Node count of the most recent search's main thread (for `bench`).
     pub search_moves: Vec<String>, // UCI `go searchmoves`: restrict the root search (empty = all).
     pub positions: Mutex<Vec<Position>>, // Game position history (grows with the game; no fixed cap).
@@ -54,6 +62,7 @@ impl Game {
             time_control: ChessClock::new(),
             book: OpeningBook::new(),
             is_cancel_pending: AtomicBool::new(false),
+            is_stop_requested: AtomicBool::new(false),
             thread_count: Game::compute_default_threads(),
             move_overhead: 30,
             is_pondering: AtomicBool::new(false),
@@ -153,10 +162,16 @@ impl Game {
         let mv = self.search_root_node();
         // UCI forbids sending `bestmove` while pondering: if the ponder search ended on its own
         // (reached max depth or a forced mate) before the GUI resolved it, wait here until
-        // `ponderhit` clears is_pondering or `stop` sets is_cancel_pending. For a normal
+        // `ponderhit` clears is_pondering or `stop` sets is_stop_requested. For a normal
         // (non-ponder) search is_pondering is false, so this is a no-op.
+        //
+        // This keys off is_stop_requested, NOT is_cancel_pending: the root search sets
+        // is_cancel_pending at the end of EVERY search (to wind up the Lazy SMP helpers), so gating
+        // on it made this loop dead code and the engine answered while still pondering. Both flags
+        // read here are written only by the UCI thread, so no search finishing concurrently with a
+        // `stop` can clobber the release.
         while self.is_pondering.load(Ordering::Relaxed)
-            && !self.is_cancel_pending.load(Ordering::Relaxed)
+            && !self.is_stop_requested.load(Ordering::Relaxed)
         {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
@@ -179,10 +194,10 @@ impl Game {
         let game = self; // local alias so the search body reads uniformly through `game`
         game.ponder_move
             .store(Move::none().bits(), Ordering::Relaxed);
-        // Clear the stop flag (set true by start_thinking's stop_thinking) up front — BEFORE the
-        // book / single-move early returns. Otherwise a leftover cancel makes
-        // search_thread_entry's ponder-wait exit immediately and emit a premature `bestmove` when
-        // `go ponder` lands on a book/forced position (which returns without search).
+        // Clear the cancel flag up front — BEFORE the book / single-move early returns. The worker
+        // path has it clear already (start_thinking clears it), but `bench` calls this directly on
+        // the UCI thread, where a cancel left over from a previous `stop` would abort the search on
+        // its first node poll.
         game.is_cancel_pending.store(false, Ordering::Relaxed);
         game.last_search_node_count.store(0, Ordering::Relaxed); // stays 0 for book/forced returns
                                                                  // If there is a book move for this position, do not bother with search (unless OwnBook is
@@ -301,7 +316,13 @@ impl Game {
             game.last_search_node_count
                 .store(state.node_count, Ordering::Relaxed); // main-thread total (for `bench`)
 
-            game.is_cancel_pending.store(true, Ordering::Relaxed); // signal helpers to stop
+            // Signal the helpers to wind up. This flag means only that — "the main thread is done" —
+            // and NOT "the GUI asked us to stop"; search_thread_entry's ponder-wait keys off
+            // is_stop_requested for the latter. An earlier fix tried to save/restore this flag here
+            // instead of separating the two concerns, which raced: a `stop` landing during the
+            // helper join was clobbered by the restore, and since nothing then cleared is_pondering
+            // the ponder-wait spun forever while stop_thinking blocked in join — a permanent hang.
+            game.is_cancel_pending.store(true, Ordering::Relaxed);
         }); // scope end joins the helpers, as the C++ join loop does
         best_move
     }
@@ -345,20 +366,31 @@ impl Engine {
     }
 
     /// If currently thinking, stop immediately.
+    ///
+    /// Sets is_stop_requested as well as is_cancel_pending: the latter aborts the search, the former
+    /// is what releases a ponder-wait (and, unlike is_cancel_pending, is never written by a search
+    /// thread, so a search finishing concurrently cannot clobber it — that race was a permanent
+    /// hang, since this method then blocked forever joining a worker spinning in the ponder-wait).
+    ///
     /// Note: this does NOT clear is_pondering — handle_go sets it just before calling
     /// start_thinking (which calls stop_thinking), so clearing it here would clobber the flag for
-    /// the search about to start. The ponder-wait in search_thread_entry exits on
-    /// is_cancel_pending (set below), so a `stop` during a ponder still works.
+    /// the search about to start.
     pub fn stop_thinking(&mut self) {
+        self.game.is_stop_requested.store(true, Ordering::Relaxed);
         self.game.is_cancel_pending.store(true, Ordering::Relaxed);
         if let Some(handle) = self.worker.take() {
             handle.join().expect("search worker panicked");
         }
+        self.game.is_cancel_pending.store(false, Ordering::Relaxed);
     }
 
     /// Start thinking on the worker thread.
     pub fn start_thinking(&mut self) {
         self.stop_thinking();
+        // A fresh search: the previous stop (if any) is resolved. is_stop_requested is cleared here
+        // and nowhere else, so it is only ever written by this (the UCI) thread.
+        self.game.is_stop_requested.store(false, Ordering::Relaxed);
+        self.game.is_cancel_pending.store(false, Ordering::Relaxed);
         let game = Arc::clone(&self.game);
         self.worker = Some(std::thread::spawn(move || game.search_thread_entry()));
     }
