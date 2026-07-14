@@ -22,11 +22,18 @@ jobs:
         run: cargo build --release --bins
       - name: Test (release, includes bench golden + uci shell suite)
         run: cargo test --release
+      # Drives the real BINARY over UCI (the golden test above exercises the library), so it is worth
+      # keeping — but it must NOT hardcode a second copy of the signature. It used to, and that copy
+      # silently drifted: when the golden was re-blessed 6,888,983 -> 6,601,454 for the depth-weighted
+      # history change, this literal was missed and CI stayed red for three commits. Derive it from the
+      # single source of truth instead: GOLDEN_TOTAL in tests/bench_golden_test.rs.
       - name: Bench determinism signature
         run: |
+          want=$(grep -oP 'GOLDEN_TOTAL:\s*u64\s*=\s*\K[0-9_]+' tests/bench_golden_test.rs | tr -d '_')
+          [ -n "$want" ] || { echo "::error::could not read GOLDEN_TOTAL from tests/bench_golden_test.rs"; exit 1; }
           nodes=$(./target/release/pawnstar <<< $'bench\nquit' | grep -Eo '^[0-9]+ nodes' | grep -Eo '[0-9]+')
-          echo "bench: $nodes nodes"
-          test "$nodes" = "6888983"
+          echo "bench: $nodes nodes (expected $want)"
+          test "$nodes" = "$want"
 
   format:
     runs-on: ubuntu-latest
