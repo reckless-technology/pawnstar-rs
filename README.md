@@ -49,6 +49,27 @@ for e in ../pawnstar/build/pawnstar target/release/pawnstar; do
 done | ... diff the two halves — they are identical.
 ```
 
+## Continuous integration
+
+`.github/workflows/ci.yml` gates every push and pull request to `main` with three jobs:
+
+- **build-test** and **format** — `cargo build/test --release` plus the bench determinism signature,
+  and `cargo fmt --check`.
+- **build + test (windows x86_64)** — the same build and suites on the organisation's self-hosted
+  Windows runners (`[self-hosted, Windows, X64]`), added 2026-09-26. Asserting the bench signature on a
+  second platform is the point: it is a cross-platform bit-parity guarantee, and until then it was only
+  ever checked on Linux.
+
+The Windows job needs no `dtolnay/rust-toolchain` step — those runners carry rustup and
+`stable-x86_64-pc-windows-msvc` machine-wide (under `C:\Rust`, so the runner's service account can read
+them) and `rust-toolchain.toml` already pins the channel. Its shell is Git Bash 5.x, which satisfies the
+"bash >= 4 with coproc" probe in `tests/uci_shell_test.rs`, so `test/uci_test.sh` genuinely runs there
+rather than skipping as it does where no such bash exists.
+
+**The two non-Windows jobs still run on `ubuntu-latest`**, which makes this the last repository in the
+organisation using a GitHub-hosted runner; everything else runs on machines Jonny owns. Moving them to
+`[self-hosted, Linux, X64]` is a one-line change each, deliberately not bundled with the Windows work.
+
 ## Structure
 
 Each `src/*.rs` module ports the same-named C++ header 1:1 (structs, fields, functions —
