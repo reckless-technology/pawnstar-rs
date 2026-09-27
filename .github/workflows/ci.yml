@@ -43,3 +43,39 @@ jobs:
         with:
           components: rustfmt
       - run: cargo fmt --check
+
+  # Windows x86-64 (MSVC toolchain), on the organisation's self-hosted Windows runners — the
+  # same [self-hosted, Windows, X64] pool the C++ and Go ports' artifact-windows jobs use.
+  # No dtolnay/rust-toolchain step here: those runners carry rustup and the
+  # stable-x86_64-pc-windows-msvc toolchain machine-wide (RUSTUP_HOME and CARGO_HOME under
+  # C:\Rust, so the runner's service account can see them), and rust-toolchain.toml already
+  # pins the channel. The shell is Git Bash 5.x, which satisfies the "bash >= 4 with coproc"
+  # probe in tests/uci_shell_test.rs — so the shell suite runs here rather than skipping.
+  build-test-windows:
+    name: build + test (windows x86_64)
+    runs-on: [self-hosted, Windows, X64]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history so build.rs's `git rev-list --count` isn't undercounted
+      - name: Toolchain
+        run: |
+          rustc --version
+          cargo --version
+      - name: Build (release)
+        run: cargo build --release --bins
+      - name: Test (release, includes bench golden + uci shell suite)
+        run: cargo test --release
+      # Derived the same way as the Linux job: GOLDEN_TOTAL in tests/bench_golden_test.rs is the
+      # single source of truth for the signature — never a second literal here. Running it on
+      # Windows too is the point: the signature is a cross-platform bit-parity guarantee.
+      - name: Bench determinism signature
+        run: |
+          want=$(grep -oP 'GOLDEN_TOTAL:\s*u64\s*=\s*\K[0-9_]+' tests/bench_golden_test.rs | tr -d '_')
+          [ -n "$want" ] || { echo "::error::could not read GOLDEN_TOTAL from tests/bench_golden_test.rs"; exit 1; }
+          nodes=$(./target/release/pawnstar.exe <<< $'bench\nquit' | grep -Eo '^[0-9]+ nodes' | grep -Eo '[0-9]+')
+          echo "bench: $nodes nodes (expected $want)"
+          test "$nodes" = "$want"
