@@ -66,9 +66,10 @@ them) and `rust-toolchain.toml` already pins the channel. Its shell is Git Bash 
 "bash >= 4 with coproc" probe in `tests/uci_shell_test.rs`, so `test/uci_test.sh` genuinely runs there
 rather than skipping as it does where no such bash exists.
 
-**The two non-Windows jobs still run on `ubuntu-latest`**, which makes this the last repository in the
-organisation using a GitHub-hosted runner; everything else runs on machines Jonny owns. Moving them to
-`[self-hosted, Linux, X64]` is a one-line change each, deliberately not bundled with the Windows work.
+**Every job runs on the organisation's own machines** — `[self-hosted, Linux, X64]` for the first two,
+`[self-hosted, Windows, X64]` for the third. No job in this repository uses a GitHub-hosted image. The
+Linux legs keep their `dtolnay/rust-toolchain` step even so: unlike the Windows runners those machines
+carry no rustup, and that action's "install rustup if needed" path bootstraps it from rustup-init.
 
 ## Structure
 
