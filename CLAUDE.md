@@ -34,8 +34,9 @@ per-position best move / node count / DEBUGX counters). Test-only: `PAWNSTAR_PER
 CI runs the same gates on **Linux and Windows** (`.github/workflows/ci.yml`): `cargo build/test
 --release`, `cargo fmt --check`, and the bench determinism signature on both. The signature is derived
 from `GOLDEN_TOTAL` in `tests/bench_golden_test.rs` — never write a second copy of the number into a
-workflow; that drift once kept CI red for three commits in the sibling repo. The Windows leg runs on the
-organisation's self-hosted runners and uses their preinstalled rustup, so it needs no toolchain action.
+workflow; that drift once kept CI red for three commits in the sibling repo. Every leg runs on the
+organisation's self-hosted runners: the Windows one uses their preinstalled rustup and needs no toolchain
+action, while the Linux ones keep `dtolnay/rust-toolchain`, which bootstraps rustup where there is none.
 Note `test/uci_test.sh` really executes on Windows (Git Bash is 5.x, so the `coproc` probe passes) rather
 than skipping.
 
