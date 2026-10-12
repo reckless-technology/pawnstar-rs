@@ -138,3 +138,14 @@ checks and indirect attack-fn calls that clang folds harder); movegen is only ~1
 node's cost, so it barely registers in play. Future work: x86-64 AVX2/VNNI output-dot kernels
 (`std::arch` + the ported cpuid gate in `platform.rs`), untested here for lack of x86 hardware —
 any such change must reproduce the bench golden signature exactly.
+
+## License
+
+pawnstar-rs is free software, licensed under the **GNU General Public License, version 3** (GPLv3). You may
+redistribute and/or modify it under the terms of that license; it comes with **no warranty**. See the
+[LICENSE](LICENSE) file for the full text, or <https://www.gnu.org/licenses/gpl-3.0.html>.
+
+The NNUE network ([nnue/pawnstar-v12.bin](nnue/pawnstar-v12.bin)) and the opening book
+([pawnstar.book](pawnstar.book)) are the ones [Pawnstar](https://github.com/reckless-technology/pawnstar)
+ships, under the same license; the book is derived from the public-domain
+[TSCP](https://github.com/terredeciels/TSCP) `book.txt`.

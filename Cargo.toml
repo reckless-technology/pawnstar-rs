@@ -3,7 +3,7 @@ name = "pawnstar"
 version = "0.13.0"
 edition = "2021"
 description = "Pawnstar UCI chess engine — mechanical Rust port of the C++ original"
-license = "MIT"
+license = "GPL-3.0-only"
 
 [features]
 # Mirrors the C++ DEBUGX flag: diagnostic counters compiled in by default,
