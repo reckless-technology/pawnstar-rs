@@ -44,8 +44,8 @@ than skipping.
 
 The whole value of this port is bit-exactness with `../pawnstar`
 (https://github.com/jonny-reckless/pawnstar). `tests/bench_golden_test.rs` locks the signature:
-bench depth 13, single-threaded = **6,888,983 nodes** with fixed per-position node counts and best
-moves (C++ commit 609, net v12). The Go port (../pawnstar-go) shares the same signature; a
+bench depth 13, single-threaded = **6,601,454 nodes** with fixed per-position node counts and best
+moves (net v12; `GOLDEN_TOTAL` is the number's one home). The Go port (../pawnstar-go) shares the same signature; a
 900-game round-robin at 10+0.1 put all three engines within error bars (C++ vs Rust: an exact
 150–150 tie).
 
