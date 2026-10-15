@@ -24,8 +24,9 @@
 # The files: pawnstar-rs-<version>-linux-x86_64, -windows-x86_64.exe and -macos-arm64.zip (the binary inside), the
 # source as -source.tar.gz (git archive at the commit) and the API documentation as -docs-html.zip (cargo doc). verify
 # opens the release as a draft and each job uploads straight onto it, so no workflow artifact stands between a build
-# and its release; publish checks all five are there, pushes the tag and takes the draft public. A run that fails before
-# it publishes leaves only a draft, which the next run replaces.
+# and its release; publish makes the source and documentation (in a dry run too), checks all five are on the draft,
+# pushes the tag and takes the draft public. A failed job can be run again; a run that fails before it publishes leaves
+# only a draft, which the next run replaces.
 #
 # Every job runs on the organisation's self-hosted runners, never a hosted image, and never for a pull request: this
 # workflow holds the signing secrets.
@@ -294,6 +295,10 @@ jobs:
         run: |
           set -o pipefail
           name=$(basename "$SHIPPED")
+          # A file of the same name an earlier attempt left on the draft is replaced, so the job can run again.
+          for stale in $(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" --jq ".[] | select(.name == \"$name\") | .id"); do
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$stale"
+          done
           curl --fail-with-body --silent --show-error -X POST \
             -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
             -H "Content-Type: application/octet-stream" --data-binary "@$SHIPPED" \
@@ -313,9 +318,12 @@ jobs:
         if: always()
         run: rm -rf out "$RUNNER_TEMP/unzipped"
 
+  # The source and the documentation, made in a dry run too, so a release's first run of this job is not its first run
+  # at all; then, in a publishing run, the draft checked and published. Every step is safe to run again: an upload
+  # replaces a file of the same name an earlier attempt left on the draft, and a tag an earlier attempt pushed is taken
+  # as it stands when it names this commit.
   publish:
-    name: publish
-    if: needs.verify.outputs.publish == 'true'
+    name: source, documentation, publish
     needs: [verify, build]
     runs-on: [self-hosted, Linux, X64]
     timeout-minutes: 30
@@ -323,6 +331,7 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       VERSION: ${{ needs.verify.outputs.version }}
       TAG: ${{ needs.verify.outputs.tag }}
+      PUBLISH: ${{ needs.verify.outputs.publish }}
       RELEASE_ID: ${{ needs.verify.outputs.release_id }}
     steps:
       - uses: actions/checkout@v4
@@ -330,21 +339,38 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
       - uses: dtolnay/rust-toolchain@stable
-      - name: The source and the documentation, onto the draft
+      - name: The source and the documentation
         run: |
           set -euo pipefail
           rm -rf assets && mkdir assets
           git archive --format=tar.gz --prefix="pawnstar-rs-$VERSION/" -o "assets/pawnstar-rs-$VERSION-source.tar.gz" "$GITHUB_SHA"
           cargo doc --no-deps --release
           (cd target/doc && zip -qr "../../assets/pawnstar-rs-$VERSION-docs-html.zip" .)
+          ls -l assets
+      - name: Onto the draft
+        if: env.PUBLISH == 'true'
+        run: |
+          set -euo pipefail
           for file in assets/*; do
+            name=$(basename "$file")
+            for stale in $(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" --jq ".[] | select(.name == \"$name\") | .id"); do
+              gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$stale"
+            done
             curl --fail-with-body --silent --show-error -X POST \
               -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
               -H "Content-Type: application/octet-stream" --data-binary "@$file" \
-              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$(basename "$file")" |
+              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$name" |
               grep -o '"browser_download_url": *"[^"]*"'
           done
+      - uses: actions/upload-artifact@v4
+        if: env.PUBLISH != 'true'
+        continue-on-error: true
+        with:
+          name: source-and-docs
+          path: assets/*
+          retention-days: 1
       - name: Publish the release
+        if: env.PUBLISH == 'true'
         run: |
           set -euo pipefail
           release="repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID"
@@ -359,8 +385,7 @@ jobs:
           done
           [ -z "$missing" ] || exit 1
           # The release's own tag on the commit built, made with git and pushed. The tagger is named on the command
-          # alone: the runner keeps this clone, and an identity written into its config would outlive the job. A tag an
-          # earlier attempt pushed is taken as it stands when it names this commit.
+          # alone: the runner keeps this clone, and an identity written into its config would outlive the job.
           git tag -d "$TAG" > /dev/null 2>&1 || true
           if git fetch --quiet origin "refs/tags/$TAG:refs/tags/$TAG" 2> /dev/null; then
             [ "$(git rev-parse "$TAG^{commit}")" = "$GITHUB_SHA" ] ||
