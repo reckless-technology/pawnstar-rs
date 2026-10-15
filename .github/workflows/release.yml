@@ -295,8 +295,10 @@ jobs:
         run: |
           set -o pipefail
           name=$(basename "$SHIPPED")
-          # A file of the same name an earlier attempt left on the draft is replaced, so the job can run again.
-          for stale in $(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" --jq ".[] | select(.name == \"$name\") | .id"); do
+          # A file of the same name an earlier attempt left on the draft is replaced, so the job can run again (where the
+          # runner has gh; a first attempt needs no removal).
+          command -v gh > /dev/null || echo "no gh here: a file an earlier attempt left would stop this upload"
+          for stale in $(command -v gh > /dev/null && gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets" --jq ".[] | select(.name == \"$name\") | .id"); do
             gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/assets/$stale"
           done
           curl --fail-with-body --silent --show-error -X POST \
