@@ -554,6 +554,44 @@ in `tests/uci_shell_test.rs`, so `test/uci_test.sh` really runs there rather tha
 their `dtolnay/rust-toolchain` step all the same: unlike the Windows runners, those machines carry no rustup, and that
 action's "install rustup if needed" path bootstraps it.
 
+## Versions and releases
+
+The version is `MAJOR.MINOR.BUILD`, from git alone, the rule all of reckless-technology's projects follow:
+
+- `MAJOR.MINOR` is the nearest annotated tag `vMAJOR.MINOR` reachable from the commit built (a *version mark*, made by
+  hand on `main`);
+- `BUILD` is the number of commits since that tag, the tagged commit itself being 0.
+
+`build.rs` works it out (`git describe --tags --match 'v*.*' --exclude 'v*.*.*'`) and the engine reports it:
+`id name Pawnstar 1.0.0`, and in the banner. Nothing in the tree holds a version to edit (`Cargo.toml`'s is a fixed
+`0.0.0` placeholder). A tree with no mark reachable - a source tarball, a shallow clone, a fork without the tags -
+builds as `0.0.0`, with a warning.
+
+`.github/workflows/release.yml` makes a release:
+
+- **Pushing a mark** (`git tag -a v1.1 -m "Pawnstar-RS 1.1" && git push origin v1.1`) releases `1.1.0`.
+- **Running it by hand** on `main` (`gh workflow run release.yml --ref main`) releases `main`'s head as
+  `MAJOR.MINOR.BUILD`. `-f dry_run=true`, from any branch, builds, tests and signs the macOS binary but publishes
+  nothing.
+
+It refuses a mark that isn't `vMAJOR.MINOR`, a commit not on `main`, and a version already released. Each platform is
+built and tested from nothing on the organisation's self-hosted runners, with the bench signature checked, and each
+shipped binary must report the version. The workflow creates the release `vMAJOR.MINOR.BUILD` and its tag itself. It
+never runs for a pull request.
+
+| File | What it is |
+|---|---|
+| `pawnstar-rs-<version>-windows-x86_64.exe` | the engine, Authenticode-signed through SSL.com eSigner (Jonathan Reckless) |
+| `pawnstar-rs-<version>-macos-arm64.zip` | the engine for Apple silicon, signed with a Developer ID (hardened runtime) and notarised by Apple |
+| `pawnstar-rs-<version>-linux-x86_64` | the engine for Linux |
+| `pawnstar-rs-<version>-source.tar.gz`, `-docs-html.zip` | the source at the commit, and the API documentation |
+
+The macOS engine ships in a zip because a bare binary can't carry a stapled notarisation ticket: Gatekeeper looks its
+ticket up online, and the zip keeps the executable bit through a browser's download. The signing runs from
+`tools/sign-macos.sh` and `tools/sign-windows.ps1`, with the organisation's signing secrets (the same ones as its other
+apps). The Windows binary is signed only in a run that publishes, since every signing spends the eSigner account's
+allowance. A publishing run that would ship an unsigned binary fails.
+
 ## Structure
 
 Each `src/*.rs` module ports the same-named C++ header one to one: the same structs, fields and functions, with

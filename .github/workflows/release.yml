@@ -1,0 +1,378 @@
+# Cut a release: push a version mark - an annotated two-component tag vMAJOR.MINOR on a commit of main - and the engine
+# is built and tested on Linux, Windows and macOS (Apple silicon), signed, each binary checked to report the version,
+# then published as GitHub release vMAJOR.MINOR.0. Run it by hand (workflow_dispatch) on main to release main's head
+# as vMAJOR.MINOR.BUILD. The version is build.rs's rule, so the release and the binaries agree by construction:
+# MAJOR.MINOR from the nearest vMAJOR.MINOR tag, BUILD the number of commits since it. The workflow creates the
+# three-component tag itself; only two-component tags are version marks. A version already released is refused.
+#
+# A dry run (workflow_dispatch with dry_run, from any branch) builds, tests, signs and notarises the macOS binary -
+# which costs nothing - and publishes nothing; it leaves the Windows binary unsigned, since every eSigner signing spends
+# the SSL.com account's allowance. With no vMAJOR.MINOR tag reachable a dry run carries on as 0.0.0 (build.rs's
+# fallback); a publishing run refuses.
+#
+# The organisation's other apps (vst-plugins, ir-capture) are released the same way, with the same organisation secrets
+# for signing:
+#   - Windows: the engine is Authenticode-signed through SSL.com's eSigner (CodeSignTool pinned by version and hash, in
+#     the runner's tool cache; tools/sign-windows.ps1), the account checked before the build, which spends no signing.
+#     Only a publishing run signs, and only the one file it ships.
+#   - macOS: the engine is signed with the Developer ID Application identity, the hardened runtime and a secure
+#     timestamp on a keychain of the job's own (tools/sign-macos.sh), and notarised by Apple. A bare binary can carry no
+#     stapled ticket, so it ships in a zip - which keeps its executable bit through a browser's download - and
+#     Gatekeeper finds its ticket online, as the release checks it does.
+#   A publishing run that would ship an unsigned binary fails instead.
+#
+# The files: pawnstar-rs-<version>-linux-x86_64, -windows-x86_64.exe and -macos-arm64.zip (the binary inside), the
+# source as -source.tar.gz (git archive at the commit) and the API documentation as -docs-html.zip (cargo doc). verify
+# opens the release as a draft and each job uploads straight onto it, so no workflow artifact stands between a build
+# and its release; publish checks all five are there, pushes the tag and takes the draft public. A run that fails before
+# it publishes leaves only a draft, which the next run replaces.
+#
+# Every job runs on the organisation's self-hosted runners, never a hosted image, and never for a pull request: this
+# workflow holds the signing secrets.
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build, test and sign the macOS binary only; publish nothing (the Windows binary unsigned)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write # the draft, the tag and the release
+
+# One release at a time: a tag push and a dispatch at once would each replace and publish drafts under the other. A run
+# waits for the one in progress rather than cancel it, which could leave a half-uploaded draft behind.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: version and commit
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      publish: ${{ steps.version.outputs.publish }}
+      release_id: ${{ steps.version.outputs.release_id }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the tags and the commits since the nearest one are the version
+          fetch-tags: true
+      - name: The version from the tags, the commit on main, and the draft
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          is_dry_run=false
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" = "true" ]; then
+            is_dry_run=true
+          fi
+          if [ "${{ github.ref_type }}" = "tag" ] && ! [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::$GITHUB_REF_NAME is not a version mark vMAJOR.MINOR; the three-component release tags are made by this workflow"
+            exit 1
+          fi
+          # main and nowhere else, but for a dry run, which publishes nothing and may prove a change to the release
+          # from its branch before it merges.
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if [ "$is_dry_run" = false ]; then
+            if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "$GITHUB_REF" != "refs/heads/main" ]; then
+              echo "::error::a release is cut from main, not $GITHUB_REF"
+              exit 1
+            fi
+            git merge-base --is-ancestor "$GITHUB_SHA" origin/main ||
+              { echo "::error::$GITHUB_SHA is not on main: tag a commit of main"; exit 1; }
+          fi
+          describe=$(git describe --tags --long --match 'v[0-9]*.[0-9]*' --exclude 'v*.*.*' 2> /dev/null || true)
+          if [[ "$describe" =~ ^v([0-9]+)\.([0-9]+)-([0-9]+)-g[0-9a-f]+$ ]]; then
+            version="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+          elif [ "$is_dry_run" = true ]; then
+            echo "::warning::no vMAJOR.MINOR tag is reachable from $GITHUB_SHA: a dry run as 0.0.0, build.rs's fallback"
+            version=0.0.0
+          else
+            echo "::error::no vMAJOR.MINOR tag is reachable from $GITHUB_SHA (git describe: '$describe'): tag main and push the tag"
+            exit 1
+          fi
+          tag="v$version"
+          publish=true
+          [ "$is_dry_run" = true ] && publish=false
+          release_id=""
+          if [ "$publish" = true ]; then
+            if is_draft=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2> /dev/null); then
+              if [ "$is_draft" = true ]; then
+                echo "A draft of $tag is left from a run that did not publish; replacing it"
+                gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes
+              else
+                echo "::error::$tag is already released: push a commit (the build number moves on) or tag the next vMAJOR.MINOR"
+                exit 1
+              fi
+            fi
+            changes=$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases/generate-notes" -f tag_name="$tag" \
+              -f target_commitish="$GITHUB_SHA" --jq .body)
+            {
+              echo "Pawnstar-RS $version: the Rust port of the Pawnstar UCI chess engine, bit-exact with the C++ (the same"
+              echo "bench signature on every platform), built and tested at commit \`$GITHUB_SHA\` by run"
+              echo "[#$GITHUB_RUN_ID]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)."
+              echo
+              echo "- **Windows:** \`pawnstar-rs-$version-windows-x86_64.exe\`, Authenticode-signed (Jonathan Reckless)."
+              echo "- **macOS (Apple silicon):** the binary in \`pawnstar-rs-$version-macos-arm64.zip\`, signed with a"
+              echo "  Developer ID and notarised by Apple."
+              echo "- **Linux (x86-64):** \`pawnstar-rs-$version-linux-x86_64\`; \`chmod +x\` it."
+              echo
+              echo "$changes"
+            } > "$RUNNER_TEMP/notes.md"
+            # The REST API's answer carries the draft's numeric id, which the build jobs upload to: a draft has no tag
+            # to be found by.
+            release_id=$(gh api -X POST "repos/$GITHUB_REPOSITORY/releases" -f tag_name="$tag" \
+              -f target_commitish="$GITHUB_SHA" -f name="Pawnstar-RS $version" -F draft=true \
+              -F body=@"$RUNNER_TEMP/notes.md" --jq .id)
+            echo "draft release $tag opened: id $release_id"
+          fi
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "publish=$publish"
+            echo "release_id=$release_id"
+          } >> "$GITHUB_OUTPUT"
+          echo "Pawnstar-RS $version (git describe: ${describe:-none}); publish=$publish"
+
+  build:
+    name: build + test (${{ matrix.name }})
+    needs: verify
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - name: linux x86_64
+            runner: [self-hosted, Linux, X64]
+            binary: pawnstar
+            asset: linux-x86_64
+          - name: windows x86_64
+            runner: [self-hosted, Windows, X64]
+            binary: pawnstar.exe
+            asset: windows-x86_64.exe
+          - name: macos arm64
+            runner: [self-hosted, macOS, ARM64]
+            binary: pawnstar
+            asset: macos-arm64.zip
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 240 # the macOS job waits on Apple's notary service
+    env:
+      VERSION: ${{ needs.verify.outputs.version }}
+      PUBLISH: ${{ needs.verify.outputs.publish }}
+      # The file shipped; on macOS a zip, which holds the binary staged under the same name without .zip.
+      SHIPPED: out/pawnstar-rs-${{ needs.verify.outputs.version }}-${{ matrix.asset }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # build.rs reads the version from the tags
+          fetch-tags: true
+      - name: Start from nothing
+        run: rm -rf target/release out
+      # The Windows runners carry rustup and the MSVC toolchain machine-wide (ci.yml's note); elsewhere the action
+      # brings the stable toolchain rust-toolchain.toml names.
+      - if: runner.os != 'Windows'
+        uses: dtolnay/rust-toolchain@stable
+      # SSL.com's CodeSignTool, pinned by version and hash and kept in the tool cache, and the account signed in to and
+      # its certificate listed - which spends no signing - before the build rides on it.
+      - name: eSigner's signing tool, and the account checked
+        if: runner.os == 'Windows' && env.PUBLISH == 'true'
+        shell: pwsh
+        env:
+          ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
+          ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
+          ESIGNER_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
+        run: |
+          if (-not $env:ESIGNER_USERNAME) { throw "no eSigner secrets: a release's Windows binary is signed" }
+          $version = 'v1.3.2'
+          $sha256 = '4afc32e8b7f79bbe1de7e4e7049aaad4e0f754357613b9bbec0e3052f06fd36b'
+          $dir = Join-Path $env:RUNNER_TOOL_CACHE "codesigntool\$version"
+          if (-not (Test-Path (Join-Path $dir 'CodeSignTool.bat'))) {
+            $zip = Join-Path $env:RUNNER_TEMP 'codesigntool.zip'
+            Invoke-WebRequest -UseBasicParsing -OutFile $zip `
+              -Uri "https://github.com/SSLcom/CodeSignTool/releases/download/$version/CodeSignTool-$version-windows.zip"
+            $hash = (Get-FileHash -Algorithm SHA256 $zip).Hash.ToLowerInvariant()
+            if ($hash -ne $sha256) { throw "CodeSignTool $version is $hash, not the pinned $sha256" }
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $dir
+            Expand-Archive -Path $zip -DestinationPath $dir
+            Remove-Item -Force $zip
+          }
+          "RECKLESS_CODESIGNTOOL=$dir" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          $env:RECKLESS_CODESIGNTOOL = $dir
+          pwsh -NoProfile -File tools/sign-windows.ps1 -Check
+          if ($LASTEXITCODE -ne 0) { throw "the eSigner account is not ready to sign" }
+      - name: Build (release)
+        run: cargo build --release --bins
+      - name: Test (release, includes bench golden + uci shell suite)
+        run: cargo test --release
+      - name: Bench determinism signature
+        run: |
+          set -o pipefail
+          # sed, not grep -P: the Mac's grep has no -P. GOLDEN_TOTAL in tests/bench_golden_test.rs is the number's
+          # one home, as in ci.yml.
+          want=$(sed -nE 's/.*GOLDEN_TOTAL:[[:space:]]*u64[[:space:]]*=[[:space:]]*([0-9_]+).*/\1/p' tests/bench_golden_test.rs | tr -d '_')
+          [ -n "$want" ] || { echo "::error::could not read GOLDEN_TOTAL from tests/bench_golden_test.rs"; exit 1; }
+          nodes=$(./target/release/${{ matrix.binary }} <<< $'bench\nquit' | grep -Eo '^[0-9]+ nodes' | grep -Eo '[0-9]+')
+          echo "bench: $nodes nodes (expected $want)"
+          test "$nodes" = "$want"
+      - name: Stage
+        run: |
+          mkdir -p out
+          cp "target/release/${{ matrix.binary }}" "${SHIPPED%.zip}"
+      - name: Sign (Windows, a publishing run)
+        if: runner.os == 'Windows' && env.PUBLISH == 'true'
+        shell: pwsh
+        env:
+          ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
+          ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
+          ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
+          ESIGNER_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
+        run: |
+          pwsh -NoProfile -File tools/sign-windows.ps1 $env:SHIPPED
+          if ($LASTEXITCODE -ne 0) { throw "the Windows binary was not signed" }
+      - name: Open the signing keychain (macOS)
+        if: runner.os == 'macOS'
+        env:
+          MACOS_DEVELOPER_ID_APPLICATION_P12: ${{ secrets.MACOS_DEVELOPER_ID_APPLICATION_P12 }}
+          MACOS_SIGNING_P12_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
+          MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
+        run: tools/sign-macos.sh open
+      - name: Sign and notarise (macOS)
+        if: runner.os == 'macOS'
+        env:
+          MACOS_TEAM_ID: ${{ secrets.MACOS_TEAM_ID }}
+          MACOS_NOTARY_KEY_P8: ${{ secrets.MACOS_NOTARY_KEY_P8 }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+        run: |
+          binary="${SHIPPED%.zip}"
+          tools/sign-macos.sh sign --identifier com.recklesstechnology.pawnstar-rs "$binary"
+          # ditto, as Finder makes a zip: the executable bit and the signature come out as they went in.
+          ditto -c -k "$binary" "$SHIPPED"
+          tools/sign-macos.sh notarize "$SHIPPED"
+          tools/sign-macos.sh check "$binary"
+          rm "$binary"
+      # What ships is what is checked: the staged file itself (the zip's own binary on macOS), after signing.
+      - name: The shipped binary reports the version, and is signed where it must be
+        run: |
+          set -o pipefail
+          ls -l out
+          binary="$SHIPPED"
+          if [[ "$SHIPPED" == *.zip ]]; then
+            rm -rf "$RUNNER_TEMP/unzipped" && mkdir "$RUNNER_TEMP/unzipped"
+            ditto -x -k "$SHIPPED" "$RUNNER_TEMP/unzipped"
+            binary="$RUNNER_TEMP/unzipped/$(basename "${SHIPPED%.zip}")"
+            codesign --verify --strict --verbose=2 "$binary"
+          fi
+          name=$("$binary" <<< $'uci\nquit' | grep -m1 '^id name' || true)
+          echo "$name"
+          [ "$name" = "id name Pawnstar $VERSION" ] ||
+            { echo "::error::the binary says '$name', not Pawnstar $VERSION"; exit 1; }
+      - name: Nothing unsigned ships (Windows)
+        if: runner.os == 'Windows' && env.PUBLISH == 'true'
+        shell: pwsh
+        run: |
+          $signature = Get-AuthenticodeSignature -FilePath $env:SHIPPED
+          "$($signature.Status): $($signature.SignerCertificate.Subject)"
+          if ($signature.Status -ne 'Valid') { throw "$env:SHIPPED is not validly signed: $($signature.StatusMessage)" }
+      - name: Upload to the draft release
+        if: env.PUBLISH == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ID: ${{ needs.verify.outputs.release_id }}
+        run: |
+          set -o pipefail
+          name=$(basename "$SHIPPED")
+          curl --fail-with-body --silent --show-error -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: application/octet-stream" --data-binary "@$SHIPPED" \
+            "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$name" |
+            grep -o '"browser_download_url": *"[^"]*"'
+      - uses: actions/upload-artifact@v4
+        if: env.PUBLISH != 'true'
+        continue-on-error: true
+        with:
+          name: ${{ matrix.asset }}
+          path: out/*
+          retention-days: 1
+      - name: Close the signing keychain (macOS)
+        if: always() && runner.os == 'macOS'
+        run: tools/sign-macos.sh close
+      - name: The workspace left clean
+        if: always()
+        run: rm -rf out "$RUNNER_TEMP/unzipped"
+
+  publish:
+    name: publish
+    if: needs.verify.outputs.publish == 'true'
+    needs: [verify, build]
+    runs-on: [self-hosted, Linux, X64]
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.verify.outputs.version }}
+      TAG: ${{ needs.verify.outputs.tag }}
+      RELEASE_ID: ${{ needs.verify.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - uses: dtolnay/rust-toolchain@stable
+      - name: The source and the documentation, onto the draft
+        run: |
+          set -euo pipefail
+          rm -rf assets && mkdir assets
+          git archive --format=tar.gz --prefix="pawnstar-rs-$VERSION/" -o "assets/pawnstar-rs-$VERSION-source.tar.gz" "$GITHUB_SHA"
+          cargo doc --no-deps --release
+          (cd target/doc && zip -qr "../../assets/pawnstar-rs-$VERSION-docs-html.zip" .)
+          for file in assets/*; do
+            curl --fail-with-body --silent --show-error -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" \
+              -H "Content-Type: application/octet-stream" --data-binary "@$file" \
+              "https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID/assets?name=$(basename "$file")" |
+              grep -o '"browser_download_url": *"[^"]*"'
+          done
+      - name: Publish the release
+        run: |
+          set -euo pipefail
+          release="repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID"
+          draft_tag=$(gh api "$release" --jq .tag_name)
+          [ "$draft_tag" = "$TAG" ] || { echo "::error::the draft (id $RELEASE_ID) is for $draft_tag, not $TAG"; exit 1; }
+          assets=$(gh api "$release" --jq '.assets[].name')
+          missing=""
+          for file in "pawnstar-rs-$VERSION-linux-x86_64" "pawnstar-rs-$VERSION-windows-x86_64.exe" \
+                      "pawnstar-rs-$VERSION-macos-arm64.zip" "pawnstar-rs-$VERSION-source.tar.gz" \
+                      "pawnstar-rs-$VERSION-docs-html.zip"; do
+            grep -qx "$file" <<< "$assets" || { echo "::error::$file is not on the draft $TAG"; missing="$missing $file"; }
+          done
+          [ -z "$missing" ] || exit 1
+          # The release's own tag on the commit built, made with git and pushed. The tagger is named on the command
+          # alone: the runner keeps this clone, and an identity written into its config would outlive the job. A tag an
+          # earlier attempt pushed is taken as it stands when it names this commit.
+          git tag -d "$TAG" > /dev/null 2>&1 || true
+          if git fetch --quiet origin "refs/tags/$TAG:refs/tags/$TAG" 2> /dev/null; then
+            [ "$(git rev-parse "$TAG^{commit}")" = "$GITHUB_SHA" ] ||
+              { echo "::error::$TAG already names another commit than $GITHUB_SHA"; exit 1; }
+          else
+            git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              tag -a "$TAG" "$GITHUB_SHA" -m "Pawnstar-RS $VERSION"
+            git push origin "$TAG"
+          fi
+          gh api -X PATCH "$release" -F draft=false -f make_latest=true --jq .html_url
+          gh api "$release" --jq '.assets[] | "  \(.name)  \(.size) bytes"'
+          echo "### Released [$TAG]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TAG)" >> "$GITHUB_STEP_SUMMARY"
+      - name: The workspace left clean
+        if: always()
+        run: rm -rf assets

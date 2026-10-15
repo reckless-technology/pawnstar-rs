@@ -16,7 +16,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # full history so build.rs's `git rev-list --count` isn't undercounted
+          fetch-depth: 0 # the tags and the history: build.rs derives the version from them
       - uses: dtolnay/rust-toolchain@stable
       - name: Build (release)
         run: cargo build --release --bins
@@ -60,7 +60,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # full history so build.rs's `git rev-list --count` isn't undercounted
+          fetch-depth: 0 # the tags and the history: build.rs derives the version from them
       - name: Toolchain
         run: |
           rustc --version

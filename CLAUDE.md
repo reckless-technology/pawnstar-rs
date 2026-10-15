@@ -40,6 +40,14 @@ action, while the Linux ones keep `dtolnay/rust-toolchain`, which bootstraps rus
 Note `test/uci_test.sh` really executes on Windows (Git Bash is 5.x, so the `coproc` probe passes) rather
 than skipping.
 
+**Versions and releases** (README, "Versions and releases"): the version is `MAJOR.MINOR.BUILD` from git alone -
+the nearest annotated `vMAJOR.MINOR` tag and the commits since it, derived in `build.rs`; nothing in the tree is
+edited to release (`Cargo.toml`'s version is a `0.0.0` placeholder). Pushing a mark (`v1.1`) runs
+`.github/workflows/release.yml`: built, tested and bench-checked on Linux, Windows and Apple silicon, the Windows
+binary eSigner-signed (publishing runs only - each signing spends the allowance), the macOS one Developer ID-signed and
+notarised in a zip, published as `v1.1.0`. `gh workflow run release.yml --ref <branch> -f dry_run=true` proves a
+change to it without publishing or spending a Windows signing.
+
 ## The parity contract (the one hard rule)
 
 The whole value of this port is bit-exactness with `../pawnstar`

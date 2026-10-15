@@ -1,6 +1,8 @@
 [package]
 name = "pawnstar"
-version = "0.13.0"
+# Not the engine's version, which build.rs derives from the git tags (src/version.rs); a fixed placeholder, so
+# nothing here is edited to release.
+version = "0.0.0"
 edition = "2021"
 description = "Pawnstar UCI chess engine — mechanical Rust port of the C++ original"
 license = "GPL-3.0-only"
