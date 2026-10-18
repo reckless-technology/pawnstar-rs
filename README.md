@@ -13,6 +13,13 @@ depths 8 to 13, and `tests/bench_golden_test.rs` locks it in.
 
 ## Build and run
 
+**Setting up a machine.** `tools/setup-dev.ps1` (Windows) and `tools/setup-dev.sh` (Linux, macOS) install what
+building, testing, debugging and coverage need - rustup with the stable toolchain, rustfmt, clippy and llvm-tools,
+cargo-llvm-cov, Visual Studio's C++ build tools on Windows (behind a UAC prompt), a bash >= 4 for the UCI shell suite
+(Git Bash on Windows, Homebrew's on macOS) - plus the git hooks and the recommended VS Code extensions, checking each
+first, so they are safe to run again; `-Check` / `--check` only reports. In VS Code they are the `setup environment`
+and `check environment` tasks.
+
 ```bash
 cargo build --release          # engine → target/release/pawnstar (net + book embedded)
 ./target/release/pawnstar      # interactive UCI session
