@@ -1,0 +1,5 @@
+{
+  // rust-analyzer for the code model; CodeLLDB to debug on every platform; the C/C++ extension for the Visual Studio
+  // debugger on Windows.
+  "recommendations": ["rust-lang.rust-analyzer", "vadimcn.vscode-lldb", "ms-vscode.cpptools"]
+}

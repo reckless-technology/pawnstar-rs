@@ -1,0 +1,45 @@
+{
+  // Cargo runs the same on Linux, macOS and Windows, so these tasks need no per-platform form. The dev profile is
+  // optimised (opt-level 3) with overflow checks and debug info: what the launches debug. CI builds and tests release.
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "cargo build",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["build", "--bin", "pawnstar"],
+      "problemMatcher": ["$rustc"],
+      "group": { "kind": "build", "isDefault": true }
+    },
+    {
+      "label": "cargo build --release",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["build", "--release", "--bins"],
+      "problemMatcher": ["$rustc"],
+      "group": "build"
+    },
+    {
+      "label": "cargo test --release",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["test", "--release"],
+      "problemMatcher": ["$rustc"],
+      "group": { "kind": "test", "isDefault": true }
+    },
+    {
+      "label": "cargo fmt --check",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["fmt", "--check"],
+      "problemMatcher": []
+    },
+    {
+      "label": "cargo clippy --release",
+      "type": "shell",
+      "command": "cargo",
+      "args": ["clippy", "--release"],
+      "problemMatcher": ["$rustc"]
+    }
+  ]
+}

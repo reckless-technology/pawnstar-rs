@@ -1,0 +1,40 @@
+{
+  // CodeLLDB's launch builds through cargo and debugs the engine on Linux, macOS and Windows alike. On Windows the
+  // Visual Studio debugger (the C/C++ extension's cppvsdbg) reads the MSVC target's .pdb best, so it has its own
+  // launch, built first by the "cargo build" task. Each runs in the integrated terminal from the repo root, where
+  // the engine finds nnue/ and the book: type UCI commands there (uci, position ..., go ..., bench).
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug pawnstar (CodeLLDB)",
+      "type": "lldb",
+      "request": "launch",
+      "cargo": { "args": ["build", "--bin", "pawnstar"], "filter": { "name": "pawnstar", "kind": "bin" } },
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "terminal": "integrated"
+    },
+    {
+      "name": "Attach to pawnstar (CodeLLDB)",
+      "type": "lldb",
+      "request": "attach",
+      "pid": "${command:pickMyProcess}"
+    },
+    {
+      "name": "Windows: Debug pawnstar (Visual Studio debugger)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/target/debug/pawnstar.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "preLaunchTask": "cargo build"
+    },
+    {
+      "name": "Windows: Attach to pawnstar (Visual Studio debugger)",
+      "type": "cppvsdbg",
+      "request": "attach",
+      "processId": "${command:pickProcess}"
+    }
+  ]
+}
