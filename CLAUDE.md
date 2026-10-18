@@ -26,6 +26,7 @@ cargo build --release                            # engine → target/release/paw
 cargo test --release                             # all suites, incl. the uci shell test and the
                                                  #   bench golden (the parity regression lock)
 bash test/uci_test.sh target/release/pawnstar    # UCI suite standalone (bash >= 4 for coproc)
+cargo llvm-cov --release --ignore-filename-regex 'src/bin/' --summary-only   # line coverage (CI gate: 90 %)
 cargo fmt --check && cargo clippy --release      # style gates (fmt is enforced; clippy advisory)
 cargo run --release --bin stamp_net -- <raw> <out>   # tools (see ../pawnstar/nnue/README.md)
 cargo run --release --bin dump_magics
@@ -46,6 +47,14 @@ organisation's self-hosted runners: the Windows one uses their preinstalled rust
 action, while the Linux ones keep `dtolnay/rust-toolchain`, which bootstraps rustup where there is none.
 Note `test/uci_test.sh` really executes on Windows (Git Bash is 5.x, so the `coproc` probe passes) rather
 than skipping.
+
+**Coverage** (README, "Coverage"): CI's `coverage` job runs every suite under `cargo llvm-cov --release` and fails
+under **90 % of lines**. The figure is the engine library and the `pawnstar` binary - `src/` without `src/bin/`:
+`dump_magics` and `stamp_net` are developer tools run by hand and are deliberately excluded
+(`--ignore-filename-regex 'src/bin/'`). The binary suites (`uci_shell_test`, `uci_robustness_test`,
+`uci_binary_test`) count because the binary they spawn is the instrumented one and inherits `LLVM_PROFILE_FILE`; a
+spawned engine must therefore end by returning from `main` (end of input or `quit`) or exiting within the suite's
+grace period - a killed process writes no profile. New code comes with tests that keep the figure over 90 %.
 
 **Versions and releases** (README, "Versions and releases"): the version is `MAJOR.MINOR.BUILD` from git alone -
 the nearest annotated `vMAJOR.MINOR` tag and the commits since it, derived in `build.rs`; nothing in the tree is
@@ -95,7 +104,9 @@ are scoped threads in `Game::search_root_node`.
 `cargo test` covers everything the C++ `make check` runs: perft (full 131-record EPD to depth 6),
 SEE (24 cases + fast==reference cross-check), NNUE (bullet reference ±2cp, int8 bound), NNUE
 incremental (bit-identity vs refresh), Bratko-Kopec (hard 24/24 gate at depth 8, single-threaded),
-opening book, chess clock, the uci_test.sh shell suite, plus two Rust-only gates: table goldens
-(`generated_data_test.rs`) and the bench golden. NNUE-dependent suites skip (pass) when
+opening book, chess clock, the uci_test.sh shell suite, plus Rust-only gates: table goldens
+(`generated_data_test.rs`, and a unit test running the `const` table generators at run time), the bench golden,
+every UCI command in process (`uci_commands_test.rs`), the binary's start-up and fallbacks (`uci_binary_test.rs`)
+and the library helpers the search does not call (`library_api_test.rs`). NNUE-dependent suites skip (pass) when
 `nnue/pawnstar-v12.bin` is absent, preserving the C++ exit-0 contract. Shipping a new net follows
 the C++ checklist (../pawnstar/nnue/README.md §7) plus re-blessing the golden test here.

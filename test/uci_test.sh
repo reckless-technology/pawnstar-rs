@@ -56,8 +56,10 @@ send "setoption name OwnBook value false"
 send "ucinewgame"
 send "position startpos"
 send "go depth 12"
-out=$(read_until '^bestmove' 30)
-last_info=$(echo "$out" | grep '^info depth' | tail -1)
+out=$(read_until '^bestmove' 120)
+# The last iteration's summary line: once a search runs past the ~3 s currmove gate (a slow or
+# instrumented build), `info depth N currmove ...` lines follow it and carry no seldepth.
+last_info=$(echo "$out" | grep '^info depth.* seldepth ' | tail -1)
 if [ -n "$last_info" ]; then
     d=$(echo "$last_info" | sed -E 's/.*info depth +([0-9]+).*/\1/')
     s=$(echo "$last_info" | sed -E 's/.*seldepth +([0-9]+).*/\1/')
@@ -74,7 +76,7 @@ fi
 #    works the bestmove must be exactly that. (A normal search from startpos returns a real developing move.)
 send "position startpos"
 send "go searchmoves a2a3 depth 10"
-out=$(read_until '^bestmove' 30)
+out=$(read_until '^bestmove' 120)
 bm=$(echo "$out" | grep '^bestmove')
 echo "$bm" | grep -q '^bestmove a2a3' && pass "go searchmoves restricts root (forced a2a3)" || fail "searchmoves: expected 'bestmove a2a3', got '$bm'"
 
@@ -83,7 +85,7 @@ echo "$bm" | grep -q '^bestmove a2a3' && pass "go searchmoves restricts root (fo
 #    tight window can be straddled by a single deep root move and emit nothing.
 send "position startpos"
 send "go movetime 6000"
-out=$(read_until '^bestmove' 30)
+out=$(read_until '^bestmove' 120)
 echo "$out" | grep -q 'currmove [a-h][1-8][a-h][1-8].* currmovenumber [0-9]' &&
     pass "info currmove/currmovenumber emitted on a long search" || fail "currmove/currmovenumber not emitted"
 

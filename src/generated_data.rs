@@ -510,3 +510,49 @@ const ZOBRIST_TABLES: ([[[ZobristT; 64]; 6]; 2], [ZobristT; 16], [ZobristT; 64])
 pub const PIECE_SQUARE_HASHES: [[[ZobristT; 64]; 6]; 2] = ZOBRIST_TABLES.0;
 pub const CASTLING_RIGHTS_HASHES: [ZobristT; 16] = ZOBRIST_TABLES.1;
 pub const EN_PASSANT_HASHES: [ZobristT; 64] = ZOBRIST_TABLES.2;
+
+#[cfg(test)]
+mod tests {
+    //! The tables above are `const`, so the compiler evaluates their generators and the engine
+    //! never runs them. Run here at run time - through `black_box`, so nothing is folded back
+    //! into a constant - each generator must give exactly the table the compiler baked in: the
+    //! same arithmetic on both sides of const evaluation. (tests/generated_data_test.rs holds the
+    //! baked tables to the C++ engine's values.)
+
+    use super::*;
+    use std::hint::black_box;
+
+    #[test]
+    fn const_tables_equal_their_generators_run_at_run_time() {
+        type SquareTable = (&'static [Bitboard; 64], fn(u8) -> u64);
+        let per_square: [SquareTable; 7] = [
+            (&EAST_WEST, make_east_west),
+            (&PAWN_ATTACKS_WHITE, make_pawn_attacks_white),
+            (&PAWN_ATTACKS_BLACK, make_pawn_attacks_black),
+            (&KNIGHT_ATTACKS, knight_attacks),
+            (&BISHOP_ATTACKS, bishop_attacks_on_empty_board),
+            (&ROOK_ATTACKS, rook_attacks_on_empty_board),
+            (&KING_ATTACKS, king_attacks),
+        ];
+        for (table, generator) in per_square {
+            for sq in 0u8..64 {
+                assert_eq!(table[sq as usize].0, black_box(generator)(black_box(sq)));
+            }
+        }
+
+        let make_intervening: fn() -> [[Bitboard; 64]; 64] = make_intervening_squares;
+        let intervening = black_box(make_intervening)();
+        for from in 0..64 {
+            for to in 0..64 {
+                assert_eq!(intervening[from][to], INTERVENING_SQUARES[from][to]);
+            }
+        }
+
+        type ZobristTables = ([[[ZobristT; 64]; 6]; 2], [ZobristT; 16], [ZobristT; 64]);
+        let make_zobrist: fn() -> ZobristTables = make_zobrist_tables;
+        let zobrist = black_box(make_zobrist)();
+        assert_eq!(zobrist.0, PIECE_SQUARE_HASHES);
+        assert_eq!(zobrist.1, CASTLING_RIGHTS_HASHES);
+        assert_eq!(zobrist.2, EN_PASSANT_HASHES);
+    }
+}

@@ -85,10 +85,18 @@ impl Engine {
         false
     }
 
+    /// Send `quit` and give the engine up to five seconds to exit on its own - long enough for an
+    /// instrumented build to write its coverage profile - before killing it.
     fn quit(mut self) {
         let _ = writeln!(self.stdin, "quit");
         let _ = self.stdin.flush();
-        std::thread::sleep(Duration::from_millis(50));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if let Ok(Some(_)) = self.child.try_wait() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
     }

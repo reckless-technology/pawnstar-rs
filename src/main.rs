@@ -116,6 +116,8 @@ fn main() {
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
-        process_input(&mut engine, &line);
+        if !process_input(&mut engine, &line) {
+            break; // `quit`: the search is stopped; returning from main exits 0
+        }
     }
 }

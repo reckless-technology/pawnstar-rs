@@ -72,12 +72,29 @@ bash test/uci_test.sh target/release/pawnstar     # the UCI integration suite on
 | `chess_clock_test` | Deadlines, elapsed time, `ponderhit` and reset. |
 | `uci_shell_test` | Runs `test/uci_test.sh` against the built engine: handshake, `seldepth`, `searchmoves`, `currmove` and `bench`. |
 | `uci_robustness_test` | Malformed FENs never panic, and `go ponder` never answers before `ponderhit` or `stop`. |
-| `generated_data_test` | Rust only: golden values for the Zobrist keys and magic tables, printed by the C++. |
+| `uci_commands_test` | Rust only: every UCI command and option in process, through `process_input` - each `position` form, each `go` keyword and its clock, each `setoption` name and range, the diagnostic commands, `bench`, `quit`, malformed lines and `PAWNSTAR_THREADS`. |
+| `uci_binary_test` | Rust only: the binary's start-up - the banner, the book and the net found in the working directory, beside the executable, through `PAWNSTAR_EVALFILE` or not at all (the embedded fallbacks) - and `quit`. |
+| `library_api_test` | Rust only: the public helpers the search never calls, the net loader's refusals, the book's in-memory form and display, the material-draw rules and the FEN reader's fallbacks. |
+| `generated_data_test` | Rust only: golden values for the Zobrist keys and magic tables, printed by the C++. A unit test in `src/generated_data.rs` runs the tables' `const` generators at run time and holds them to the tables the compiler baked. |
 | `bench_golden_test` | Rust only: the 6,601,454-node `bench` signature, and each position's node count and best move. |
 
 The NNUE-dependent suites skip (and pass) when `nnue/pawnstar-v12.bin` is absent, as the C++ suites exit 0 without
 it. Shipping a new net follows the C++ checklist (`../pawnstar/nnue/README.md` §7), plus re-blessing the golden test
 here.
+
+### Coverage
+
+```bash
+cargo llvm-cov --release --ignore-filename-regex 'src/bin/' --summary-only   # per-file line coverage
+cargo llvm-cov --release --ignore-filename-regex 'src/bin/' --html --open    # line by line
+```
+
+CI fails a pull request under **90 % of lines** (the `coverage` job). The figure covers the engine library and the
+`pawnstar` binary - everything under `src/` but `src/bin/`, whose `dump_magics` and `stamp_net` are developer tools
+run by hand and are left out. Every suite runs instrumented, the binary suites included: the `pawnstar` they spawn is
+the instrumented build, and it inherits cargo-llvm-cov's `LLVM_PROFILE_FILE`, so `main.rs` and the UCI handlers
+count. An instrumented search is many times slower than a release one, so the whole run takes a while (the bench
+golden alone some minutes).
 
 To reproduce the parity check against the C++ engine, run both and compare their transcripts:
 
@@ -540,9 +557,12 @@ empty.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` gates every push and pull request to `main` with three jobs:
+`.github/workflows/ci.yml` gates every push and pull request to `main` with four jobs:
 
 - **build-test** runs `cargo build/test --release` and checks the bench determinism signature.
+- **coverage** runs every suite under `cargo llvm-cov --release` and fails under 90 % of lines, `src/bin/` left out
+  (see [Coverage](#coverage)). It installs the pinned cargo-llvm-cov into the runner's `~/.cargo` once, and again only
+  when the pin moves.
 - **format** runs `cargo fmt --check`.
 - **build + test (windows x86_64)** runs the same build and suites on the organisation's self-hosted Windows runners
   (`[self-hosted, Windows, X64]`). Checking the bench signature on a second platform makes it a cross-platform parity
@@ -556,7 +576,7 @@ The Windows job needs no `dtolnay/rust-toolchain` step. Those runners carry rust
 `rust-toolchain.toml` pins the channel. Its shell is Git Bash 5.x, which satisfies the "bash >= 4 with coproc" probe
 in `tests/uci_shell_test.rs`, so `test/uci_test.sh` really runs there rather than skipping.
 
-**Every job runs on the organisation's own machines**: `[self-hosted, Linux, X64]` for the first two and
+**Every job runs on the organisation's own machines**: `[self-hosted, Linux, X64]` for the first three and
 `[self-hosted, Windows, X64]` for the third. No job in this repository uses a GitHub-hosted image. The Linux jobs keep
 their `dtolnay/rust-toolchain` step all the same: unlike the Windows runners, those machines carry no rustup, and that
 action's "install rustup if needed" path bootstraps it.
@@ -656,6 +676,10 @@ Some C++ is intentionally not ported:
   take sane defaults, and the stream-poisoning on a bad halfmove field is reproduced.
 - The int8 eval dot accumulates in `i32`, which is provably in range and gives identical results, so LLVM vectorises
   the scalar kernel. The C++ scalar kernel uses `int64` and its AVX2 kernel `int32`.
+- `quit` stops the search and then returns from `main` (`process_input` returns false), where the C++ calls
+  `exit(0)`. The exit code and the output are the same; returning runs the C runtime's exit handlers on every platform,
+  where Rust's `process::exit` is `ExitProcess` on Windows and skips them - and with them an instrumented build's
+  coverage profile.
 
 ## Performance
 

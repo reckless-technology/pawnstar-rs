@@ -1,6 +1,7 @@
 # CI mirrors the C++ repo's gates: a build-and-test job (all suites, including the bench golden
-# that locks bit-exact parity with the C++ engine, and the uci_test.sh shell suite) and a format
-# job (the whole tree must stay cargo-fmt-clean, like the C++ clang-format gate).
+# that locks bit-exact parity with the C++ engine, and the uci_test.sh shell suite), a coverage
+# job (90 % of lines, src/bin/ excepted) and a format job (the whole tree must stay
+# cargo-fmt-clean, like the C++ clang-format gate).
 name: CI
 
 on:
@@ -34,6 +35,31 @@ jobs:
           nodes=$(./target/release/pawnstar <<< $'bench\nquit' | grep -Eo '^[0-9]+ nodes' | grep -Eo '[0-9]+')
           echo "bench: $nodes nodes (expected $want)"
           test "$nodes" = "$want"
+
+  # Line coverage of the engine library and the pawnstar binary, gated at 90 %. Every suite runs
+  # instrumented, the UCI shell suite and the binary suites included: the binary they spawn is the
+  # instrumented one (CARGO_BIN_EXE_pawnstar), and it inherits cargo-llvm-cov's LLVM_PROFILE_FILE,
+  # so main.rs and the UCI handlers count. src/bin/ is left out: dump_magics and stamp_net are
+  # developer tools run by hand, not the engine. cargo-llvm-cov is installed once into the
+  # runner's ~/.cargo, which persists between jobs, and again only when its pinned version moves.
+  coverage:
+    runs-on: [self-hosted, Linux, X64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the tags and the history: build.rs derives the version from them
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools
+      - name: cargo-llvm-cov
+        run: |
+          want=0.9.1
+          if ! cargo llvm-cov --version 2>/dev/null | grep -qx "cargo-llvm-cov $want"; then
+            cargo install cargo-llvm-cov --locked --version "$want"
+          fi
+          cargo llvm-cov --version
+      - name: Line coverage (fails under 90 %)
+        run: cargo llvm-cov --release --ignore-filename-regex 'src/bin/' --fail-under-lines 90 --summary-only
 
   format:
     runs-on: [self-hosted, Linux, X64]

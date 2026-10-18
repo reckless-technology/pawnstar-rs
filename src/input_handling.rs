@@ -371,10 +371,13 @@ fn handle_ponderhit(engine: &mut Engine, _args: &[String]) {
     game.is_pondering.store(false, Ordering::Relaxed);
 }
 
-/// Handle the "quit" command: stop searching and exit the program.
+/// Handle the "quit" command: stop searching. `process_input` then returns false and `main`
+/// returns, so the engine exits 0 as the C++ `exit(0)` does - but by returning from `main`, which
+/// runs the C runtime's exit handlers on every platform (Rust's `process::exit` is
+/// `ExitProcess` on Windows, which skips them - and with them an instrumented build's coverage
+/// profile), and lets a library caller quit without ending its own process.
 fn handle_quit(engine: &mut Engine, _args: &[String]) {
     engine.stop_thinking();
-    std::process::exit(0);
 }
 
 /// Handle the "isready" command: respond with readyok.
@@ -543,11 +546,12 @@ pub static HANDLERS: &[Handler] = &[
     },
 ];
 
-/// Tokenize a line of input and dispatch it to the matching command handler.
-pub fn process_input(engine: &mut Engine, line: &str) {
+/// Tokenize a line of input and dispatch it to the matching command handler. Returns false once
+/// the line was `quit` (the caller stops reading input and exits), true otherwise.
+pub fn process_input(engine: &mut Engine, line: &str) -> bool {
     let args: Vec<String> = line.split_whitespace().map(str::to_string).collect();
     if args.is_empty() {
-        return;
+        return true;
     }
     for handler in HANDLERS {
         if args[0] == handler.name {
@@ -555,4 +559,5 @@ pub fn process_input(engine: &mut Engine, line: &str) {
             break;
         }
     }
+    args[0] != "quit"
 }
