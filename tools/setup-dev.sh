@@ -38,11 +38,11 @@ installing() { printf '  \033[36minstall\033[0m  %-24s %s\n' "$1" "$2"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 os=$(uname -s)
 
-# Put a directory on this shell's PATH and, unless --no-persist, on every new shell's (the profiles a login shell,
-# bash and zsh read).
+# Put a directory on this shell's PATH and, unless --no-persist or --check (which changes nothing), on every new shell's
+# (the profiles a login shell, bash and zsh read).
 add_to_path() {
     case ":$PATH:" in *":$1:"*) ;; *) PATH="$1:$PATH"; export PATH ;; esac
-    [ "$persist" = 1 ] || return 0
+    [ "$persist" = 1 ] && [ "$check" = 0 ] || return 0
     local line="export PATH=\"$1:\$PATH\""
     local profiles=("$HOME/.profile" "$HOME/.bashrc")
     [ "$os" = Darwin ] && profiles+=("$HOME/.zprofile")
@@ -67,7 +67,8 @@ sudo_cmd() { if [ "$(id -u)" = 0 ]; then "$@"; else sudo "$@"; fi; }
 apt_packages() {
     local need=()
     for p in "$@"; do
-        dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q 'install ok installed' || need+=("$p")
+        # A here-string, not a pipe into grep -q: under pipefail a writer cut off by grep's early exit fails the test.
+        grep -q 'install ok installed' <<<"$(dpkg-query -W -f='${Status}' "$p" 2>/dev/null || true)" || need+=("$p")
     done
     if [ ${#need[@]} = 0 ]; then ok 'apt packages' "$*"; return; fi
     if [ "$check" = 1 ]; then miss 'apt packages' "${need[*]}"; return; fi
@@ -128,7 +129,7 @@ install_vscode_extensions() {
     local installed
     installed=$(code --list-extensions 2>/dev/null || true)
     for ext in $(sed -e 's://.*$::' .vscode/extensions.json | tr -d '\n' | sed -e 's/.*"recommendations"[^[]*\[//' -e 's/\].*//' | tr -d '" ' | tr ',' ' '); do
-        if printf '%s\n' "$installed" | grep -qixF "$ext"; then ok 'VS Code extension' "$ext"
+        if grep -qixF "$ext" <<<"$installed"; then ok 'VS Code extension' "$ext"
         elif [ "$check" = 1 ]; then miss 'VS Code extension' "$ext"
         else installing 'VS Code extension' "$ext"; code --install-extension "$ext" --force >/dev/null; fi
     done
@@ -177,7 +178,7 @@ if have rustup; then
     components=(rustfmt clippy llvm-tools)
     installed=$(rustup component list --installed --toolchain stable 2>/dev/null || true)
     lacking=()
-    for c in "${components[@]}"; do printf '%s\n' "$installed" | grep -q "^$c" || lacking+=("$c"); done
+    for c in "${components[@]}"; do grep -q "^$c" <<<"$installed" || lacking+=("$c"); done
     if [ ${#lacking[@]} = 0 ]; then ok 'Rust stable' "$(rustc +stable --version) with ${components[*]}"
     elif [ "$check" = 1 ]; then miss 'Rust stable' "needs ${lacking[*]}"
     else

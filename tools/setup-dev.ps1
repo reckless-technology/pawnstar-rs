@@ -44,10 +44,11 @@ function Write-Missing([string]$name, [string]$detail) {
 }
 function Write-Installing([string]$name, [string]$detail) { Write-Host ("  install  {0,-24} {1}" -f $name, $detail) -ForegroundColor Cyan }
 
-# Put a directory on this process's PATH and, unless -NoPersist, on the user's PATH for every new shell.
+# Put a directory on this process's PATH and, unless -NoPersist or -Check (which changes nothing), on the user's PATH
+# for every new shell.
 function Add-ToPath([string]$dir) {
   if (($env:PATH -split ';') -notcontains $dir) { $env:PATH = "$dir;$env:PATH" }
-  if ($NoPersist) { return }
+  if ($NoPersist -or $Check) { return }
   $user = [Environment]::GetEnvironmentVariable('Path', 'User')
   if ((($user -split ';') | Where-Object { $_ }) -notcontains $dir) {
     [Environment]::SetEnvironmentVariable('Path', (@($dir) + (($user -split ';') | Where-Object { $_ })) -join ';', 'User')
