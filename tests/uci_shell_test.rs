@@ -4,15 +4,49 @@
 //! CARGO_BIN_EXE_pawnstar.
 //!
 //! The script needs bash >= 4 (`coproc`); like the CMake build, prefer a Homebrew bash on macOS
-//! (the system /bin/bash is 3.2) and skip cleanly when none is available.
+//! (the system /bin/bash is 3.2) and skip cleanly when none is available. On Windows the bash must
+//! be Git for Windows' (or MSYS2's), which reads C:\... paths, and never the bare name: Windows
+//! resolves `bash` in System32 before the PATH, where it is WSL's launcher, and that bash runs in
+//! Linux and mangles the Windows path of the script.
 
 mod common;
 
+use std::path::PathBuf;
+use std::process::Command;
+
+/// The bashes to try, in order: the C++ build's `find_program` hints, then (on Windows) the bash
+/// of the Git that `git --exec-path` names, which covers a per-user install.
+fn bash_candidates() -> Vec<PathBuf> {
+    if cfg!(windows) {
+        let mut candidates = Vec::new();
+        for root in ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"] {
+            if let Some(dir) = std::env::var_os(root) {
+                let git = PathBuf::from(dir).join("Git");
+                candidates.push(git.join("bin").join("bash.exe"));
+                candidates.push(git.join("usr").join("bin").join("bash.exe"));
+            }
+        }
+        // <git>/mingw64/libexec/git-core -> <git>/bin/bash.exe
+        if let Ok(out) = Command::new("git").arg("--exec-path").output() {
+            let exec_path = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+            if let Some(git) = exec_path.ancestors().nth(3) {
+                candidates.push(git.join("bin").join("bash.exe"));
+            }
+        }
+        candidates.push(PathBuf::from(r"C:\msys64\usr\bin\bash.exe"));
+        candidates
+    } else {
+        ["/opt/homebrew/bin/bash", "/usr/local/bin/bash", "bash"]
+            .iter()
+            .map(PathBuf::from)
+            .collect()
+    }
+}
+
 #[test]
 fn uci_shell_suite() {
-    let candidates = ["/opt/homebrew/bin/bash", "/usr/local/bin/bash", "bash"];
-    let bash = candidates.iter().find(|b| {
-        std::process::Command::new(b)
+    let bash = bash_candidates().into_iter().find(|b| {
+        Command::new(b)
             .args(["-c", "[[ ${BASH_VERSINFO[0]} -ge 4 ]]"])
             .status()
             .map(|s| s.success())
@@ -26,7 +60,7 @@ fn uci_shell_suite() {
     let script = concat!(env!("CARGO_MANIFEST_DIR"), "/test/uci_test.sh");
     // Run from the repo root (like the C++ ctest WORKING_DIRECTORY) so the engine's cwd-relative
     // net/book lookups resolve.
-    let status = std::process::Command::new(bash)
+    let status = Command::new(&bash)
         .arg(script)
         .arg(engine)
         .current_dir(env!("CARGO_MANIFEST_DIR"))
