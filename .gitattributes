@@ -1,0 +1,11 @@
+# Files bash reads stay LF in every working copy, whatever core.autocrlf says: a Windows clone with autocrlf=true would
+# otherwise check them out CRLF, and bash (Git Bash runs the UCI shell suite and the hooks on Windows) reads "\r" as
+# part of each command.
+*.sh        text eol=lf
+.githooks/* text eol=lf
+
+# Data the engine embeds (include_bytes!) or a test reads byte for byte is checked out exactly as committed, with no
+# line-ending conversion: under autocrlf=true a Windows build would embed a CRLF book where Linux and macOS embed LF -
+# a byte-different binary for the same commit. The C++ and Go engines keep theirs the same way.
+pawnstar.book            -text
+tests/nnue_reference.txt -text
