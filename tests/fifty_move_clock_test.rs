@@ -6,16 +6,16 @@
 //! irreversible, but that is the repetition scan's business, not the clock's: the castling rights
 //! it gives up are in the hash, so no position before a castling can recur after it. This suite
 //! holds `make_move`, the FEN round trip, the fifty-move draw in the search and the repetition scan
-//! to that.
+//! to that, and the search to FIDE 5.1.1: a checkmate on the hundredth ply is mate, not a draw.
 
 mod common;
 
 use pawnstar::chess_clock::ClockType;
-use pawnstar::constants::DRAW_SCORE;
+use pawnstar::constants::{ALPHA, BETA, CHECKMATED_SCORE, DRAW_SCORE};
 use pawnstar::game::Game;
 use pawnstar::moves::{Move, MoveType};
 use pawnstar::position::Position;
-use pawnstar::search_state::{evaluate_position, SearchState};
+use pawnstar::search_state::{evaluate_position, SearchState, Variation};
 
 const NET: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/nnue/pawnstar-v12.bin");
 
@@ -218,6 +218,54 @@ fn test_fifty_move_draw_across_castling() {
     );
 }
 
+/// Checkmate takes precedence over the fifty-move draw (FIDE 5.1.1): a mate on the move that
+/// completes the fifty stands. At a clock of 99 Ra8 is the hundredth ply and mates, so the root
+/// search plays it as mate in one where every other move draws. The reverse at the hundredth ply:
+/// a check that leaves a legal move (with the f7 pawn gone, Ra8+ leaves the king f7) and a quiet
+/// move (Ra2) both still draw.
+fn test_mate_takes_precedence_over_the_fifty_move_draw() {
+    let mating = "6k1/5ppp/8/8/8/8/8/R5K1 w - - 99 80";
+    let mut game = game_after(mating, &[]);
+    game.time_control.clock_type = ClockType::FixedDepth;
+    game.time_control.depth = 4;
+    let best = game.search_root_node();
+    check(
+        best.to_string() == "a1a8" && best.score() == -(CHECKMATED_SCORE + 1),
+        &format!(
+            "a mate on the hundredth ply is mate in one and is played (best {} at {})",
+            best.to_string(),
+            best.score()
+        ),
+    );
+
+    let move_score = |fen: &str, uci: &str| -> i32 {
+        let mut game = game_after(fen, &[]);
+        game.time_control.clock_type = ClockType::FixedDepth;
+        let mv = legal_move(&game.current_position(), uci);
+        check(mv != Move::none(), &format!("{uci} is legal from {fen}"));
+        let mut state = SearchState::new(&game);
+        let mut pv = Variation::new();
+        state
+            .search_single_move(4, 0, ALPHA, BETA, mv, &mut pv, 0)
+            .score()
+    };
+    let score = move_score(mating, "a1a8");
+    check(
+        score == -(CHECKMATED_SCORE + 1),
+        &format!("the mate on the hundredth ply scores mate in one (got {score})"),
+    );
+    let score = move_score("6k1/6pp/8/8/8/8/8/R5K1 w - - 99 80", "a1a8");
+    check(
+        score == DRAW_SCORE,
+        &format!("a check on the hundredth ply that leaves a legal move draws (got {score})"),
+    );
+    let score = move_score(mating, "a1a2");
+    check(
+        score == DRAW_SCORE,
+        &format!("a quiet move on the hundredth ply draws (got {score})"),
+    );
+}
+
 /// The repetition scan stops at a clock of zero, so after a castling it walks on past it - and
 /// finds no false match there, since the rights the castling gave up are in the hash. Here the
 /// king and rook walk back to e1 and h1 after castling: the same placement as the start, but
@@ -261,6 +309,7 @@ fn fifty_move_clock_suite() {
     test_castling_advances_the_clock();
     test_what_restarts_the_clock();
     test_fifty_move_draw_across_castling();
+    test_mate_takes_precedence_over_the_fifty_move_draw();
     test_repetition_scan_across_castling();
     let failures = common::summary("FIFTY-MOVE CLOCK TESTS");
     assert_eq!(failures, 0);

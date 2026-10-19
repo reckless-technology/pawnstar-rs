@@ -315,7 +315,11 @@ impl<'a> SearchState<'a> {
         sort_moves(moves);
     }
 
-    /// Check for draw by the 50-move rule.
+    /// Check the fifty-move clock: 100 plies or more since the last pawn move or capture.
+    /// The clock alone - a checkmate on the hundredth ply still stands, which `search` tests for
+    /// before it draws. The static eval's own use of it decides no mate: in the search every
+    /// position it scores has passed `search`'s tests first, or is a capture's child with the clock
+    /// at 0, and it scores a quiet position not in check.
     #[inline(always)]
     pub fn is_draw_by_fifty_moves(&self) -> bool {
         self.current_position().reversible_move_count >= 100
@@ -485,10 +489,24 @@ impl<'a> SearchState<'a> {
                 .store(true, std::sync::atomic::Ordering::Relaxed);
             return SEARCH_CANCELLED_SCORE;
         }
-        if self.current_position().is_draw_by_material()
-            || self.is_draw_by_fifty_moves()
-            || self.is_draw_by_repetition()
-        {
+        if self.current_position().is_draw_by_material() {
+            return DRAW_SCORE;
+        }
+        if self.is_draw_by_fifty_moves() {
+            // Checkmate takes precedence over the fifty-move draw (FIDE 5.1.1; 9.6.2 says so of the
+            // 75-move rule): a mate delivered on the move that completes the fifty stands. So in check
+            // the clock draws only when the side to move has a legal move; with none it is mated,
+            // scored here at this ply as the move loop's own checkmate is. Out of check there can be
+            // no mate, and the clock draws whatever the moves. Mirrors the C++ Search.
+            if self.current_position().is_in_check()
+                && self.current_position().generate_legal_moves().is_empty()
+            {
+                increment!("checkmates");
+                return CHECKMATED_SCORE + ply;
+            }
+            return DRAW_SCORE;
+        }
+        if self.is_draw_by_repetition() {
             return DRAW_SCORE;
         }
         if self.current_position().is_in_check() {

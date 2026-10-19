@@ -662,17 +662,10 @@ Some C++ is intentionally not ported:
 
 ## Deviations from the C++
 
-Every deviation preserves the C++'s behaviour but one, a rules fix:
-
-- **Castling advances the fifty-move clock.** The C++ `MakeMove` restarts it on castling, as on a capture or a pawn
-  move; FIDE 9.3 and FEN's halfmove clock restart it on those two alone, so here castling counts as any other piece
-  move does. The FEN after a castling, the fifty-move draw and the eval's fifty-move scaling (above 20 plies) follow
-  the true clock. The `bench` transcript is unchanged to the byte, every node count and DEBUGX counter: every bench
-  position starts at a clock of 0, so the two clocks differ only after a castling inside a search, and no such line
-  carries the clock past the 20 plies where the scaling begins. In a game, where the clock runs high in a long
-  ending, the C++ and this port can now search differently. `fifty_move_clock_test` holds it.
-
-The rest:
+Every deviation preserves the C++'s behaviour. The fifty-move rules are the C++'s and Go's too: castling advances
+the clock as any other piece move does (FIDE 9.3 and FEN's halfmove clock restart it on a capture or a pawn move
+alone), and a checkmate on the hundredth ply is mate, not the fifty-move draw (FIDE 5.1.1); `fifty_move_clock_test`
+holds both.
 
 - **Threading is type-encoded.** The C++ shares `Game&` mutably across threads by convention. Here:
   - everything a search thread writes is an atomic: the TT cells, the eval cache, the stop and ponder flags, the
