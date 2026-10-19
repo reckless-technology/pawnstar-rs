@@ -46,7 +46,11 @@ workflow; that drift once kept CI red for three commits in the sibling repo. Eve
 organisation's self-hosted runners: the Windows one uses their preinstalled rustup and needs no toolchain
 action, while the Linux ones keep `dtolnay/rust-toolchain`, which bootstraps rustup where there is none.
 Note `test/uci_test.sh` really executes on Windows (Git Bash is 5.x, so the `coproc` probe passes) rather
-than skipping.
+than skipping. The Windows binary links the C runtime statically (`.cargo/config.toml`: `+crt-static` for the MSVC
+target), so it imports Windows' own DLLs alone - KERNEL32, ntdll, bcryptprimitives and the synchronisation API set -
+and needs no Visual C++ redistributable; `tools/windows-dependents.ps1` reads the PE import tables itself and fails
+CI's Windows job and the release's Windows build on any other DLL. A RUSTFLAGS in the environment replaces the
+config's flags, so no workflow sets one.
 
 **Coverage** (README, "Coverage"): CI's `coverage` job runs every suite under `cargo llvm-cov --release` and fails
 under **90 % of lines**. The figure is the engine library and the `pawnstar` binary - `src/` without `src/bin/`:

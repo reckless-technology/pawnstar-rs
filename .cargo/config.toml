@@ -1,0 +1,7 @@
+# The C runtime linked statically on Windows (MSVC): the engine then imports system DLLs alone - KERNEL32 and the
+# Windows API sets Rust's standard library calls into - and runs on a Windows with no Visual C++ redistributable, where
+# the dynamic CRT's VCRUNTIME140.dll would stop it starting. tools/windows-dependents.ps1 holds the shipped binary to
+# that in CI and in the release. Every build reads it: cargo build, cargo test, the release's build. (A RUSTFLAGS in the
+# environment would replace it, so no workflow sets one.)
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

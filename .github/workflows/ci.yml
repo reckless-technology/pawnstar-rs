@@ -93,6 +93,13 @@ jobs:
           cargo --version
       - name: Build (release)
         run: cargo build --release --bins
+      # The engine imports system DLLs alone: the C runtime is linked statically (.cargo/config.toml), so it starts on a
+      # Windows with no Visual C++ redistributable. A C or C++ runtime DLL among its imports fails the job.
+      - name: Windows DLLs the engine imports
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File tools/windows-dependents.ps1 target/release/pawnstar.exe
+          if ($LASTEXITCODE -ne 0) { throw "the engine imports a DLL outside the allowlist" }
       - name: Test (release, includes bench golden + uci shell suite)
         run: cargo test --release
       # Derived the same way as the Linux job: GOLDEN_TOTAL in tests/bench_golden_test.rs is the
