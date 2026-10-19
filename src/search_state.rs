@@ -16,7 +16,7 @@ use crate::{increment, increment_if, uci_println};
 #[derive(Clone, Copy)]
 pub struct HashEntry {
     pub hash: ZobristT,            // Zobrist hash of the position.
-    pub reversible_move_count: u8, // Half-move clock at this position.
+    pub reversible_move_count: u8, // Fifty-move (halfmove) clock at this position.
 }
 
 /// A variation (typically principal variation) is a line of play or series of moves.
@@ -323,7 +323,10 @@ impl<'a> SearchState<'a> {
 
     /// Check for three-fold repetition using the compact hash history.
     /// Walks backwards through hash_stack two entries at a time (same side to move), starting
-    /// four half-moves before the current position.
+    /// four half-moves before the current position, and stops at a fifty-move clock of zero (a
+    /// capture or pawn move), before which no position can recur. Castling does not zero the
+    /// clock, so the walk carries on past it; the castling rights it gave up are in the hash, so
+    /// the positions before it never match.
     pub fn is_draw_by_repetition(&self) -> bool {
         let hash = self.current_position().hash;
         let mut repetitions = 2;

@@ -75,6 +75,7 @@ bash test/uci_test.sh target/release/pawnstar     # the UCI integration suite on
 | `uci_commands_test` | Rust only: every UCI command and option in process, through `process_input` - each `position` form, each `go` keyword and its clock, each `setoption` name and range, the diagnostic commands, `bench`, `quit`, malformed lines and values, `PAWNSTAR_THREADS`, and every command that stops a search sent the instant after `go`, hundreds of times each under a watchdog. |
 | `uci_binary_test` | Rust only: the binary's start-up - the banner, the book and the net found in the working directory, beside the executable, through `PAWNSTAR_EVALFILE` or not at all (the embedded fallbacks) - and `quit`. |
 | `library_api_test` | Rust only: the public helpers the search never calls, the net loader's refusals, the book's in-memory form and display, the material-draw rules and the FEN reader's fallbacks. |
+| `fifty_move_clock_test` | Rust only: castling advances the fifty-move clock and only captures and pawn moves restart it, the FEN after each castling reads back, a castling on the hundredth ply is a draw to the search and the eval, and the repetition scan walks past a castling without a false match. |
 | `generated_data_test` | Rust only: golden values for the Zobrist keys and magic tables, printed by the C++. A unit test in `src/generated_data.rs` runs the tables' `const` generators at run time and holds them to the tables the compiler baked. |
 | `bench_golden_test` | Rust only: the 6,601,454-node `bench` signature, and each position's node count and best move. |
 
@@ -260,7 +261,7 @@ Pro; see [Performance](#performance).
 - the game history.
 
 Everything a search thread writes is an atomic. Every other field is written only through `Engine::game_mut()`, which
-joins the search worker first (see [Deviations](#deviations-from-the-c-all-behaviour-preserving)).
+joins the search worker first (see [Deviations](#deviations-from-the-c)).
 
 Everything else is **per thread**. It lives on each thread's `SearchState` ([src/search_state.rs](src/search_state.rs)),
 so the threads never contend:
@@ -356,9 +357,12 @@ parity depends on it.
 | Late move reduction | At a null-window node not in check, at depth > 2: −1 ply from the 5th move, −2 from the 8th (at depth > 3), −3 from the 14th. A fail-high is re-searched at full depth. |
 | Mate scores | A mated node returns `−31900 + ply`, so a shorter mate scores higher. `info` reports `score mate N` beyond ±31000. |
 
-Draws by repetition look back through `hash_stack` two plies at a time, starting four plies back, and stop at the
-last irreversible move (a fifty-move clock of zero). Two earlier matches make a threefold repetition. Insufficient
-material covers K v K, K+minor v K, and K+B v K+B with the bishops on the same colour.
+The fifty-move clock counts plies since the last capture or pawn move (FIDE 9.3, and FEN's halfmove clock): every
+other move advances it, castling included, and the position is a draw once it reaches 100. Draws by repetition look
+back through `hash_stack` two plies at a time, starting four plies back, and stop at a clock of zero. A castling does
+not zero the clock, so the walk carries on past it, but the castling rights it gives up are in the hash, so no
+position before it matches. Two earlier matches make a threefold repetition. Insufficient material covers K v K,
+K+minor v K, and K+B v K+B with the bishops on the same colour.
 
 #### Quiescence
 
@@ -656,7 +660,19 @@ Some C++ is intentionally not ported:
 - `Move::operator<`. It is unused, and it is inconsistent with the identity-masked equality under Rust's trait
   contracts.
 
-## Deviations from the C++ (all behaviour-preserving)
+## Deviations from the C++
+
+Every deviation preserves the C++'s behaviour but one, a rules fix:
+
+- **Castling advances the fifty-move clock.** The C++ `MakeMove` restarts it on castling, as on a capture or a pawn
+  move; FIDE 9.3 and FEN's halfmove clock restart it on those two alone, so here castling counts as any other piece
+  move does. The FEN after a castling, the fifty-move draw and the eval's fifty-move scaling (above 20 plies) follow
+  the true clock. The `bench` transcript is unchanged to the byte, every node count and DEBUGX counter: every bench
+  position starts at a clock of 0, so the two clocks differ only after a castling inside a search, and no such line
+  carries the clock past the 20 plies where the scaling begins. In a game, where the clock runs high in a long
+  ending, the C++ and this port can now search differently. `fifty_move_clock_test` holds it.
+
+The rest:
 
 - **Threading is type-encoded.** The C++ shares `Game&` mutably across threads by convention. Here:
   - everything a search thread writes is an atomic: the TT cells, the eval cache, the stop and ponder flags, the

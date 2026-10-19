@@ -179,8 +179,8 @@ fn test_position() {
 
     run(&mut engine, &format!("position fen {kiwipete} moves e1g1"));
     check(
-        // (The engine's make_move restarts the fifty-move count on castling.)
-        fen(&engine) == "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R4RK1 b kq - 0 1",
+        // Castling is neither a capture nor a pawn move, so it advances the fifty-move clock.
+        fen(&engine) == "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R4RK1 b kq - 1 1",
         "position fen ... moves castles",
     );
 

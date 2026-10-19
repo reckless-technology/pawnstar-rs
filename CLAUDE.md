@@ -114,7 +114,9 @@ SEE (24 cases + fast==reference cross-check), NNUE (bullet reference ±2cp, int8
 incremental (bit-identity vs refresh), Bratko-Kopec (hard 24/24 gate at depth 8, single-threaded),
 opening book, chess clock, the uci_test.sh shell suite, plus Rust-only gates: table goldens
 (`generated_data_test.rs`, and a unit test running the `const` table generators at run time), the bench golden,
-every UCI command in process (`uci_commands_test.rs`), the binary's start-up and fallbacks (`uci_binary_test.rs`)
+every UCI command in process (`uci_commands_test.rs`), the fifty-move clock (`fifty_move_clock_test.rs`: castling
+advances it, as FIDE 9.3 and FEN have it - the one rules deviation from the C++, which restarts it; README,
+"Deviations"), the binary's start-up and fallbacks (`uci_binary_test.rs`)
 and the library helpers the search does not call (`library_api_test.rs`). NNUE-dependent suites skip (pass) when
 `nnue/pawnstar-v12.bin` is absent, preserving the C++ exit-0 contract. Shipping a new net follows
 the C++ checklist (../pawnstar/nnue/README.md §7) plus re-blessing the golden test here.

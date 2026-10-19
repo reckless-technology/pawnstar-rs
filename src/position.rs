@@ -28,7 +28,7 @@ pub struct Position {
     pub hash: ZobristT,        // Zobrist hash of this position, maintained incrementally.
     pub king_location: [Square; 2], // Square index of white and black kings.
     pub en_passant_square: Square, // En passant capture availability square.
-    pub reversible_move_count: u8, // Number of consecutive reversible half-moves (plies).
+    pub reversible_move_count: u8, // Fifty-move clock: plies since the last capture or pawn move.
     pub full_move_count: u8,   // Number of full moves (zero indexed).
     pub castling_rights: CastlingRights, // Castling rights flags.
     pub is_null_move: bool,    // Whether the last move was a null (pass) move.
@@ -491,8 +491,8 @@ impl Position {
         match mv.type_() {
             MoveType::NonCapture => {
                 // A single pawn push is encoded as NonCapture (no dedicated type); like any pawn
-                // move it resets the fifty-move / reversible-move clock. Every other NonCapture is
-                // a reversible piece move and increments.
+                // move it resets the fifty-move clock. Every other NonCapture is a piece move and
+                // increments it.
                 if piece == Piece::Pawn {
                     position.reversible_move_count = 0;
                 } else {
@@ -533,7 +533,11 @@ impl Position {
                 position.move_piece(color, Piece::Pawn, from, to);
             }
             MoveType::Castling => {
-                position.reversible_move_count = 0;
+                // Castling is neither a pawn move nor a capture, so it advances the fifty-move clock
+                // like any other piece move (FIDE 9.3; FEN's halfmove clock). It is irreversible -
+                // it gives up castling rights - but that matters to repetition, not to this clock:
+                // the rights are in the hash, so no position before a castling can repeat after it.
+                position.reversible_move_count += 1;
                 if to == G1 {
                     position.move_piece(
                         Color::White,
