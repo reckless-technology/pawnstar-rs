@@ -33,7 +33,7 @@ pub struct Game {
     pub eval_cache: EvalCache, // Lockless NNUE evaluation cache (shared by all threads).
     pub time_control: ChessClock, // Clock controls for the current game.
     pub book: OpeningBook,     // The opening book.
-    pub is_cancel_pending: AtomicBool, // Shared stop flag: set on timeout, UCI stop, or completion.
+    pub is_cancel_pending: AtomicBool, // Shared stop flag: set on timeout, UCI stop, or completion; cleared only before a search starts, by the thread that starts it.
     // is_stop_requested means specifically "the GUI asked us to stop" (`stop` / `quit`, or a
     // hard-deadline expiry) — as distinct from is_cancel_pending, which ALSO means "the main thread
     // is done, helpers wind up" and is therefore set by the search itself at the end of every root
@@ -194,11 +194,12 @@ impl Game {
         let game = self; // local alias so the search body reads uniformly through `game`
         game.ponder_move
             .store(Move::none().bits(), Ordering::Relaxed);
-        // Clear the cancel flag up front — BEFORE the book / single-move early returns. The worker
-        // path has it clear already (start_thinking clears it), but `bench` calls this directly on
-        // the UCI thread, where a cancel left over from a previous `stop` would abort the search on
-        // its first node poll.
-        game.is_cancel_pending.store(false, Ordering::Relaxed);
+        // is_cancel_pending is NOT cleared here: whoever starts a search clears it before the
+        // search begins — start_thinking before it spawns the worker, set_position for the callers
+        // that run search_root_node directly (`bench`, the tests, which set the position first).
+        // Clearing it here, on the worker, lost any `stop` or `quit` that reached stop_thinking
+        // before the worker got this far: the search then started with no cancel, a `go infinite`
+        // never ended, and stop_thinking blocked in join() for ever.
         game.last_search_node_count.store(0, Ordering::Relaxed); // stays 0 for book/forced returns
                                                                  // If there is a book move for this position, do not bother with search (unless OwnBook is
                                                                  // disabled). Skip the book when `go searchmoves` restricts the root.
@@ -388,7 +389,11 @@ impl Engine {
     pub fn start_thinking(&mut self) {
         self.stop_thinking();
         // A fresh search: the previous stop (if any) is resolved. is_stop_requested is cleared here
-        // and nowhere else, so it is only ever written by this (the UCI) thread.
+        // and nowhere else, so it is only ever written by this (the UCI) thread. This is also the
+        // only place a worker's search has is_cancel_pending cleared — before the spawn, which
+        // orders it before everything the worker does; no search thread ever clears it, so a
+        // `stop` arriving at any moment after this line (before the worker has begun, during the
+        // search, or after it has finished) is seen by the search or finds it already over.
         self.game.is_stop_requested.store(false, Ordering::Relaxed);
         self.game.is_cancel_pending.store(false, Ordering::Relaxed);
         let game = Arc::clone(&self.game);

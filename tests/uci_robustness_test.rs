@@ -12,6 +12,13 @@
 //!    search left the shared cancel flag set (it uses it to wind up the Lazy SMP helpers), which
 //!    made the ponder-wait guard in `search_thread_entry` dead code. The engine must stay silent
 //!    until `ponderhit` or `stop`.
+//!
+//! 3. A `stop` or `quit` sent straight after `go` was lost when it reached the engine before the
+//!    worker had begun the root search, which cleared the cancel flag as it started: the search
+//!    never ended. Only the thread that starts a search clears the flag now, before it starts it.
+//!
+//! 4. A `go` value that is not an integer is ignored with its keyword (it read as 0 before; the C++
+//!    engine's std::stoi threw and ended the process).
 
 mod common;
 
@@ -61,6 +68,42 @@ impl Engine {
     fn send(&mut self, command: &str) {
         writeln!(self.stdin, "{command}").expect("engine stdin closed");
         self.stdin.flush().expect("engine stdin flush");
+    }
+
+    /// How many lines so far start with `prefix`.
+    fn count(&self, prefix: &str) -> usize {
+        self.lines
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|l| l.starts_with(prefix))
+            .count()
+    }
+
+    /// Wait up to `timeout_ms` for at least `n` lines starting with `prefix`.
+    fn wait_for_count(&self, prefix: &str, n: usize, timeout_ms: u64) -> bool {
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        while Instant::now() < deadline {
+            if self.count(prefix) >= n {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        false
+    }
+
+    /// Wait up to `timeout_ms` for the process to exit on its own; kill it if it has not.
+    fn exits_within(&mut self, timeout_ms: u64) -> bool {
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+        while Instant::now() < deadline {
+            if let Ok(Some(_)) = self.child.try_wait() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        false
     }
 
     /// Whether any line so far starts with `prefix`.
@@ -187,12 +230,93 @@ fn test_no_bestmove_while_pondering() {
     }
 }
 
+/// Bug 3: a `stop` or `quit` written straight after `go`, before the engine's worker has begun the
+/// root search, must still end the search. The root search used to clear the cancel flag as it
+/// began, so such a stop was lost: the engine never answered `go infinite` + `stop`, and never
+/// exited on `go infinite` + `quit` (every attempt hung before the fix).
+fn test_stop_and_quit_straight_after_go() {
+    const SETUP: &str = "setoption name OwnBook value false\nsetoption name Threads value 1";
+    let mut engine = Engine::start();
+    engine.send(SETUP);
+    engine.send("isready");
+    check(
+        engine.wait_for("readyok", 30000),
+        "[stop at once] engine ready",
+    );
+    const STOPS: usize = 300;
+    let mut answered = 0;
+    for i in 1..=STOPS {
+        engine.send("position startpos\ngo infinite\nstop");
+        if !engine.wait_for_count("bestmove", i, 30000) {
+            break; // a lost stop: the engine is wedged
+        }
+        answered += 1;
+    }
+    check(
+        answered == STOPS,
+        &format!("go infinite + stop at once: {answered}/{STOPS} answered"),
+    );
+    if answered == STOPS {
+        engine.quit();
+    } else {
+        let _ = engine.child.kill();
+        let _ = engine.child.wait();
+    }
+
+    const QUITS: usize = 20;
+    let mut exited = 0;
+    for _ in 0..QUITS {
+        let mut engine = Engine::start();
+        engine.send(SETUP);
+        engine.send("position startpos\ngo infinite\nquit");
+        if !engine.exits_within(30000) {
+            break; // one lost quit is the failure; no need to wait out the rest
+        }
+        exited += 1;
+    }
+    check(
+        exited == QUITS,
+        &format!("go infinite + quit at once: {exited}/{QUITS} engines exited"),
+    );
+}
+
+/// Bug 4: a `go` value that is not an integer, or missing, is ignored with its keyword - the line
+/// reads as a plain `go`, which `stop` ends - and the engine carries on.
+fn test_malformed_go_values() {
+    let mut engine = Engine::start();
+    engine.send("setoption name OwnBook value false\nsetoption name Threads value 1");
+    let lines = [
+        "go depth abc",
+        "go movetime",
+        "go wtime x btime y",
+        "go nodes 12x",
+        "go depth +-3",
+    ];
+    for (i, line) in lines.iter().enumerate() {
+        engine.send("position startpos");
+        engine.send(line);
+        engine.send("stop");
+        check(
+            engine.wait_for_count("bestmove", i + 1, 30000),
+            &format!("{line}: the engine survives and stop answers"),
+        );
+    }
+    engine.send("isready");
+    check(
+        engine.wait_for("readyok", 30000),
+        "still responsive after malformed go values",
+    );
+    engine.quit();
+}
+
 #[test]
 fn uci_robustness_suite() {
     test_malformed_fen_does_not_panic();
     test_no_bestmove_while_pondering();
+    test_stop_and_quit_straight_after_go();
+    test_malformed_go_values();
     assert_eq!(
-        common::summary("UCI robustness: malformed FEN totality, no bestmove while pondering"),
+        common::summary("UCI robustness: malformed FEN totality, no bestmove while pondering, stop and quit straight after go, malformed go values"),
         0,
         "uci robustness suite reported failures"
     );

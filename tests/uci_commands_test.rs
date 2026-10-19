@@ -15,7 +15,9 @@ use std::time::{Duration, Instant};
 use pawnstar::chess_clock::ClockType;
 use pawnstar::constants::{HASHTABLE_MEGABYTES, MAX_SEARCH_THREADS};
 use pawnstar::game::{Engine, START_FEN};
-use pawnstar::input_handling::{atoi, process_input, BENCH_DEPTH, BENCH_FENS, HANDLERS};
+use pawnstar::input_handling::{
+    atoi, parse_integer, process_input, saturate_to_i32, BENCH_DEPTH, BENCH_FENS, HANDLERS,
+};
 use pawnstar::moves::Move;
 
 const NET: &str = "nnue/pawnstar-v12.bin";
@@ -25,15 +27,10 @@ fn check(condition: bool, message: &str) {
     common::check(condition, message);
 }
 
-/// Send one line. After a `go`, give the worker 100 ms to start before anything else is sent:
-/// the root search clears the cancel flag as it begins, so a `stop` (or `quit`, or another
-/// command that stops the search) landing before the worker reaches that point is lost, and an
-/// infinite search would then never end. A GUI never sends `stop` that fast; a test would.
+/// Send one line. Nothing waits after a `go`: a `stop` (or `quit`, or any command that stops the
+/// search) may follow at once (test_stop_races holds that).
 fn run(engine: &mut Engine, line: &str) {
     process_input(engine, line);
-    if line.split_whitespace().next() == Some("go") {
-        std::thread::sleep(Duration::from_millis(100));
-    }
 }
 
 fn fen(engine: &Engine) -> String {
@@ -70,7 +67,41 @@ fn net_present() -> bool {
     std::path::Path::new(NET).exists()
 }
 
-/// `atoi`: the C++ semantics every numeric option and `go` value is read with.
+/// `parse_integer`: the strict rule every numeric option and `go` value is read with; anything but
+/// a whole signed integer is None, never a 0 taken from it.
+fn test_parse_integer() {
+    check(
+        parse_integer("12") == Some(12)
+            && parse_integer("-7") == Some(-7)
+            && parse_integer("+5") == Some(5)
+            && parse_integer("0") == Some(0),
+        "parse_integer reads a whole signed integer",
+    );
+    check(
+        [
+            "",
+            "+",
+            "-",
+            "+-1",
+            "1 2",
+            " 1",
+            "12x",
+            "abc",
+            "9223372036854775808",
+        ]
+        .iter()
+        .all(|text| parse_integer(text).is_none()),
+        "parse_integer refuses anything else, and an overflow",
+    );
+    check(
+        saturate_to_i32(5_000_000_000) == i32::MAX
+            && saturate_to_i32(-5_000_000_000) == i32::MIN
+            && saturate_to_i32(-3) == -3,
+        "saturate_to_i32 saturates rather than wraps",
+    );
+}
+
+/// `atoi`: the C++ semantics the PAWNSTAR_THREADS environment variable is read with.
 fn test_atoi() {
     check(atoi("64") == 64, "atoi reads digits");
     check(
@@ -279,9 +310,22 @@ fn test_setoption() {
     run(&mut engine, "setoption");
     run(&mut engine, "setoption value 4");
     run(&mut engine, "setoption name Threads");
+    run(&mut engine, "setoption name Threads value lots");
+    run(&mut engine, "setoption name Threads value 3x");
+    check(
+        engine.game().thread_count == MAX_SEARCH_THREADS,
+        "Threads with no value, or one that is not an integer, is left as it was",
+    );
+    run(&mut engine, "setoption name Move Overhead value 120");
+    run(&mut engine, "setoption name Move Overhead value soon");
+    check(
+        engine.game().move_overhead == 120,
+        "Move Overhead with a value that is not an integer is left as it was",
+    );
+    run(&mut engine, "setoption name Threads value +1");
     check(
         engine.game().thread_count == 1,
-        "Threads with no value reads 0 and clamps to 1",
+        "Threads +1: a leading plus is read",
     );
     run(&mut engine, "setoption junk name Threads value 2");
     check(
@@ -439,11 +483,52 @@ fn test_go_parsing() {
         engine.stop_thinking();
     }
 
-    // A value keyword with a garbled value reads 0; a dangling keyword reads nothing.
-    run(&mut engine, "go depth x");
-    engine.stop_thinking();
-    run(&mut engine, "go depth");
-    engine.stop_thinking();
+    // A value keyword whose value is missing or not an integer is ignored with its keyword: the line
+    // reads as though neither were there, so after `position startpos` (a standard five-minute
+    // clock, depth 10) each of these leaves that clock - and the rest of the line still counts.
+    let cases: [(&str, ClockType, i32, i64, u64); 13] = [
+        ("go depth abc", ClockType::Standard, 10, 300_000, 0),
+        ("go depth 3x", ClockType::Standard, 10, 300_000, 0),
+        ("go depth +-3", ClockType::Standard, 10, 300_000, 0),
+        ("go depth", ClockType::Standard, 10, 300_000, 0),
+        ("go movetime", ClockType::Standard, 10, 300_000, 0),
+        ("go movetime soon", ClockType::Standard, 10, 300_000, 0),
+        ("go wtime x", ClockType::Standard, 10, 300_000, 0),
+        (
+            "go wtime 99999999999999999999",
+            ClockType::Standard,
+            10,
+            300_000,
+            0,
+        ),
+        ("go nodes abc", ClockType::Standard, 10, 300_000, 0),
+        ("go movestogo x winc y", ClockType::Standard, 10, 300_000, 0),
+        (
+            "go movetime x depth 3",
+            ClockType::FixedDepth,
+            3,
+            300_000,
+            0,
+        ),
+        ("go depth +4", ClockType::FixedDepth, 4, 300_000, 0),
+        ("go wtime 1500 btime oops", ClockType::Standard, 10, 1500, 0),
+    ];
+    for (line, clock_type, depth, remaining_time, max_nodes) in cases {
+        run(&mut engine, "position startpos");
+        run(&mut engine, line);
+        let is_ignored = {
+            let tc = &engine.game().time_control;
+            tc.clock_type == clock_type
+                && tc.depth == depth
+                && tc.remaining_time == remaining_time
+                && tc.max_nodes == max_nodes
+        };
+        run(&mut engine, "stop");
+        check(
+            is_ignored && history_len(&engine) == 2,
+            &format!("{line}: a malformed or missing value is ignored with its keyword, and stop answers"),
+        );
+    }
     // A fresh go clears the previous node budget, increment and searchmoves.
     run(&mut engine, "go depth 1");
     {
@@ -607,6 +692,97 @@ fn test_go_searches() {
     run(&mut engine, "stop");
 }
 
+/// Every command that stops a search, sent the instant after `go` with no pause, ends it with a
+/// move. The root search once cleared the cancel flag as it began, so a `stop` (or `quit`, a new
+/// `go`, `ucinewgame`) that reached stop_thinking before the worker got that far was lost: the
+/// search ran on and stop_thinking waited in join() for ever. Every iteration here hung before the
+/// fix. A watchdog turns such a hang into a failure and an exit, since the blocked join cannot be
+/// abandoned.
+fn test_stop_races() {
+    if !net_present() {
+        return;
+    }
+    let is_finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let watchdog = {
+        let is_finished = std::sync::Arc::clone(&is_finished);
+        std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(120);
+            while !is_finished.load(Ordering::Relaxed) {
+                if Instant::now() > deadline {
+                    eprintln!(
+                        "[FAIL] a stop sent at once after go was lost: the search never ended"
+                    );
+                    std::process::exit(1);
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        })
+    };
+
+    let mut engine = quiet_engine();
+    const ITERATIONS: usize = 300;
+    let (mut stopped, mut ponders_stopped, mut restarted, mut new_games, mut quits) =
+        (0, 0, 0, 0, 0);
+    for _ in 0..ITERATIONS {
+        run(&mut engine, "position startpos");
+        run(&mut engine, "go infinite");
+        run(&mut engine, "stop"); // joins the search, which plays its move first
+        stopped += usize::from(history_len(&engine) == 2);
+
+        run(&mut engine, "position startpos");
+        run(&mut engine, "go ponder");
+        run(&mut engine, "stop"); // releases the ponder-wait too
+        ponders_stopped += usize::from(history_len(&engine) == 2);
+
+        run(&mut engine, "position startpos");
+        run(&mut engine, "go infinite");
+        run(&mut engine, "go depth 1"); // stops the first search, then starts a short one
+        engine.stop_thinking();
+        restarted += usize::from(history_len(&engine) == 3);
+
+        run(&mut engine, "position startpos");
+        run(&mut engine, "go infinite");
+        run(&mut engine, "ucinewgame"); // stops the search, then resets to the start position
+        new_games += usize::from(history_len(&engine) == 1);
+
+        run(&mut engine, "position startpos");
+        run(&mut engine, "go infinite");
+        let is_quit = !process_input(&mut engine, "quit");
+        quits += usize::from(is_quit && history_len(&engine) == 2);
+    }
+    // Lazy SMP: a stop that lands before the main thread has launched its helpers, or while they run.
+    run(&mut engine, "setoption name Threads value 3");
+    const HELPER_ITERATIONS: usize = 100;
+    let mut helpers_stopped = 0;
+    for _ in 0..HELPER_ITERATIONS {
+        run(&mut engine, "position startpos");
+        run(&mut engine, "go infinite");
+        run(&mut engine, "stop");
+        helpers_stopped += usize::from(history_len(&engine) == 2);
+    }
+    is_finished.store(true, Ordering::Relaxed);
+    watchdog.join().expect("watchdog");
+
+    for (count, total, what) in [
+        (stopped, ITERATIONS, "go infinite + stop at once"),
+        (ponders_stopped, ITERATIONS, "go ponder + stop at once"),
+        (
+            restarted,
+            ITERATIONS,
+            "go infinite + go depth 1 at once (two moves)",
+        ),
+        (new_games, ITERATIONS, "go infinite + ucinewgame at once"),
+        (quits, ITERATIONS, "go infinite + quit at once"),
+        (
+            helpers_stopped,
+            HELPER_ITERATIONS,
+            "Threads 3, go infinite + stop at once",
+        ),
+    ] {
+        check(count == total, &format!("{what}: {count}/{total} answered"));
+    }
+}
+
 /// `bench` at a shallow depth, with and without the per-position debug dump, restores the
 /// options it overrides.
 fn test_bench() {
@@ -677,7 +853,6 @@ fn test_quit() {
         engine = quiet_engine();
         run(&mut engine, "position startpos");
         run(&mut engine, "go infinite");
-        std::thread::sleep(Duration::from_millis(100));
         check(!process_input(&mut engine, "quit"), "quit stops reading");
         check(
             history_len(&engine) == 2,
@@ -692,6 +867,8 @@ fn test_quit() {
 
 #[test]
 fn uci_commands_suite() {
+    test_stop_races(); // first: its watchdog turns a lost stop into a failure, where later ones hang
+    test_parse_integer();
     test_atoi();
     test_dispatch();
     test_position();

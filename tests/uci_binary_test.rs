@@ -216,14 +216,14 @@ fn test_broken_book_falls_back() {
 }
 
 /// `quit` stops a running search, which answers, and ends the engine; nothing after it is read.
-/// (The search is a finite one: a `stop` or `quit` that reaches the engine before its worker has
-/// begun the root search is lost, so an infinite search here could run on for ever.)
+/// The search is an infinite one and `quit` follows at once, before the worker has begun the root
+/// search (which once cleared the cancel flag as it started, losing the quit for ever).
 fn test_quit() {
     let (out, _) = run_engine(
         Path::new(ENGINE),
         Path::new(MANIFEST_DIR),
         &[("PAWNSTAR_THREADS", "1")],
-        "setoption name OwnBook value false\nposition startpos\ngo depth 6\nquit\nisready\n",
+        "setoption name OwnBook value false\nposition startpos\ngo infinite\nquit\nisready\n",
     );
     check(
         has_line(&out, "bestmove "),

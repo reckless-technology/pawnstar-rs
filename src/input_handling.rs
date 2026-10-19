@@ -17,9 +17,8 @@ use crate::uci_println;
 use crate::version::version_string;
 
 /// C++ `std::atoi` semantics: skip leading whitespace, optional sign, then parse leading digits;
-/// 0 when no digits ("64abc" -> 64, "abc" -> 0). The C++ parses every numeric option/env/bench
-/// argument this way (and `go` values with `std::stoi`, which differs only by throwing on no
-/// digits — where this returns 0, the documented deviation).
+/// 0 when no digits ("64abc" -> 64, "abc" -> 0). The C++ reads the PAWNSTAR_THREADS environment
+/// variable this way; UCI input is read with parse_integer instead.
 pub fn atoi(s: &str) -> i64 {
     let t = s.trim_start();
     let (sign, rest) = match t.as_bytes().first() {
@@ -29,6 +28,20 @@ pub fn atoi(s: &str) -> i64 {
     };
     let digits: &str = &rest[..rest.bytes().take_while(u8::is_ascii_digit).count()];
     sign * digits.parse::<i64>().unwrap_or(0)
+}
+
+/// Read a numeric UCI value strictly: the whole of `text` must be an optional sign and decimal
+/// digits that fit an i64 — the rule of the C++ engine's ParseInteger and the Go engine's
+/// strconv.Atoi. Anything else ("abc", "12x", "", "+-3", an overflow) is None, and the caller then
+/// treats the value, and the `go` keyword or option it belongs to, as absent.
+pub fn parse_integer(text: &str) -> Option<i64> {
+    text.parse::<i64>().ok()
+}
+
+/// A parsed value narrowed to an i32 field (a depth, a move count), saturating rather than
+/// wrapping.
+pub fn saturate_to_i32(value: i64) -> i32 {
+    value.clamp(i32::MIN as i64, i32::MAX as i64) as i32
 }
 
 /// Pointer to a command handler taking the engine and the command's argument list.
@@ -125,7 +138,8 @@ fn handle_uci(engine: &mut Engine, _args: &[String]) {
 /// Recognises EvalFile (load a different NNUE net file), Hash (transposition table size in MB,
 /// 1..4096), Threads (Lazy SMP search threads), Clear Hash (a button that empties the
 /// transposition table), Move Overhead (ms reserved from each deadline, 0..5000) and OwnBook
-/// (whether to consult the built-in opening book).
+/// (whether to consult the built-in opening book). A numeric option whose value is not an integer
+/// (parse_integer) is left as it is.
 fn handle_setoption(engine: &mut Engine, args: &[String]) {
     // Parse the UCI "name <words...> value <words...>" grammar.
     let mut name = String::new();
@@ -148,15 +162,21 @@ fn handle_setoption(engine: &mut Engine, args: &[String]) {
         game.nnue_network.load(&value);
         game.eval_cache.clear(); // cached evals belong to the previous net
     } else if name == "Hash" {
-        let mb = (atoi(&value) as i32).clamp(1, 4096);
-        game.transposition_table.resize(mb as usize);
+        // A malformed value (parse_integer) leaves each numeric option as it is.
+        if let Some(mb) = parse_integer(&value) {
+            game.transposition_table.resize(mb.clamp(1, 4096) as usize);
+        }
     } else if name == "Threads" {
-        game.thread_count = (atoi(&value) as i32).clamp(1, MAX_SEARCH_THREADS);
+        if let Some(threads) = parse_integer(&value) {
+            game.thread_count = threads.clamp(1, MAX_SEARCH_THREADS as i64) as i32;
+        }
     } else if name == "Clear Hash" {
         // a button: no value, just empty the transposition table
         game.transposition_table.clear();
     } else if name == "Move Overhead" {
-        game.move_overhead = atoi(&value).clamp(0, 5000);
+        if let Some(overhead) = parse_integer(&value) {
+            game.move_overhead = overhead.clamp(0, 5000);
+        }
     } else if name == "OwnBook" {
         game.use_own_book = value == "true";
     }
@@ -204,10 +224,10 @@ pub const BENCH_DEPTH: i32 = 13;
 /// reproducibility (restored afterwards); the hash is cleared up front. Leaves the board at the
 /// last bench position (run it standalone).
 fn handle_bench(engine: &mut Engine, args: &[String]) {
-    let depth: i32 = if args.len() > 1 {
-        atoi(&args[1]) as i32
-    } else {
-        BENCH_DEPTH
+    // `bench <depth>` overrides the default; a missing, malformed or non-positive depth keeps it.
+    let depth: i32 = match args.get(1).and_then(|text| parse_integer(text)) {
+        Some(requested) if requested > 0 => saturate_to_i32(requested),
+        _ => BENCH_DEPTH,
     };
     let game = engine.game_mut();
     let saved_threads = game.thread_count;
@@ -224,7 +244,8 @@ fn handle_bench(engine: &mut Engine, args: &[String]) {
     let mut total_nodes: u64 = 0;
     let start = std::time::Instant::now();
     for fen in BENCH_FENS {
-        game.set_position(fen);
+        game.set_position(fen); // also clears the cancel flag the previous search left set
+                                // (search_root_node never does)
         game.time_control.clock_type = ClockType::FixedDepth; // set fixed depth after SetPosition's clock reset
         game.time_control.depth = depth;
         if debug {
@@ -319,9 +340,14 @@ fn handle_go(engine: &mut Engine, args: &[String]) {
                 // else: ignore unrecognised tokens
             }
             State::AwaitValue => {
-                // (The C++ uses std::stoi, which throws on garbage where atoi yields 0; this
-                // differs only on malformed GUI input — the documented deviation.)
-                let value: i64 = atoi(token);
+                state = State::AwaitKeyword;
+                // A value that is not an integer (`go depth abc`) is consumed and ignored, and so
+                // is its keyword, exactly as a keyword with no value at the end of the line is:
+                // the line reads as though neither were there.
+                let Some(value) = parse_integer(token) else {
+                    i += 1;
+                    continue;
+                };
                 let color_to_move = game.current_position().color_to_move;
                 if (pending == "wtime" && color_to_move == Color::White)
                     || (pending == "btime" && color_to_move == Color::Black)

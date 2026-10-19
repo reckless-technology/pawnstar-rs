@@ -89,8 +89,69 @@ out=$(read_until '^bestmove' 120)
 echo "$out" | grep -q 'currmove [a-h][1-8][a-h][1-8].* currmovenumber [0-9]' &&
     pass "info currmove/currmovenumber emitted on a long search" || fail "currmove/currmovenumber not emitted"
 
-send "quit"
-wait "$ENG_PID" 2>/dev/null
+# 5b) A `stop` written straight after `go`, with no pause, ends the search every time. The root search once
+#     cleared the cancel flag as it began, so a stop that reached the engine before its worker got that far was
+#     lost and the engine never answered (every iteration hung). A lost stop wedges the engine, so it is killed.
+is_engine_wedged=0
+stops_answered=0
+for _ in $(seq 1 200); do
+    send "position startpos"
+    send "go infinite"
+    send "stop"
+    if ! read_until '^bestmove' 30 >/dev/null; then
+        is_engine_wedged=1
+        break
+    fi
+    stops_answered=$((stops_answered + 1))
+done
+[ "$stops_answered" -eq 200 ] && pass "go infinite + stop at once: 200/200 answered" ||
+    fail "go infinite + stop at once: only $stops_answered/200 answered before a stop was lost"
+
+# 5c) A `go` value that is not an integer, or missing, is ignored with its keyword - it once ended the engine
+#     (std::stoi threw) - so each of these is a plain `go`, which `stop` ends.
+for line in "go depth abc" "go movetime" "go wtime x btime y" "go nodes 12x"; do
+    [ "$is_engine_wedged" -eq 0 ] || break
+    send "position startpos"
+    send "$line"
+    send "stop"
+    if read_until '^bestmove' 30 >/dev/null; then
+        pass "$line: the engine survives and stop answers"
+    else
+        fail "$line: no bestmove after stop (the engine died or hung)"
+        is_engine_wedged=1
+    fi
+done
+send "isready"
+[ "$is_engine_wedged" -eq 0 ] && read_until '^readyok' 10 >/dev/null && pass "still responsive after malformed go values" ||
+    fail "not responsive after the stop and malformed-value checks"
+
+if [ "$is_engine_wedged" -eq 0 ]; then
+    send "quit"
+    wait "$ENG_PID" 2>/dev/null
+else
+    kill -9 "$ENG_PID" 2>/dev/null
+fi
+
+# 5d) `quit` written straight after `go infinite`: the engine exits every time (a lost quit left it searching for
+#     ever). A fresh process each time, killed after 30 s if it has not exited; the first that hangs ends the loop.
+quits_exited=0
+for _ in $(seq 1 20); do
+    printf 'setoption name OwnBook value false\nposition startpos\ngo infinite\nquit\n' | "$ENGINE" >/dev/null 2>&1 &
+    quit_pid=$!
+    for _ in $(seq 1 300); do
+        kill -0 "$quit_pid" 2>/dev/null || break
+        sleep 0.1
+    done
+    if kill -0 "$quit_pid" 2>/dev/null; then
+        kill -9 "$quit_pid" 2>/dev/null
+        wait "$quit_pid" 2>/dev/null
+        break
+    fi
+    wait "$quit_pid" 2>/dev/null
+    quits_exited=$((quits_exited + 1))
+done
+[ "$quits_exited" -eq 20 ] && pass "go infinite + quit at once: the engine exits, 20/20" ||
+    fail "go infinite + quit at once: an engine never exited (after $quits_exited that did)"
 
 # 6) bench determinism: single-threaded bench is deterministic, so two runs must agree (guards the
 #    uninitialised-read class of bug that made node counts wobble). Run as a plain pipe — bench is
@@ -104,7 +165,7 @@ else
 fi
 
 if [ "$fails" -eq 0 ]; then
-    echo "[PASS] UCI: protocol handshakes, seldepth, searchmoves, currmove, bench determinism"
+    echo "[PASS] UCI: protocol handshakes, seldepth, searchmoves, currmove, stop and quit at once, malformed go values, bench determinism"
     exit 0
 fi
 echo "[FAIL] UCI: $fails check(s) failed"

@@ -70,9 +70,9 @@ bash test/uci_test.sh target/release/pawnstar     # the UCI integration suite on
 | `bratko_kopec_nnue_test` | A hard gate: all 24 Bratko-Kopec positions solved at depth 8, single-threaded. |
 | `opening_book_test` | The book's parsing, lookup and `?` (questionable) moves. |
 | `chess_clock_test` | Deadlines, elapsed time, `ponderhit` and reset. |
-| `uci_shell_test` | Runs `test/uci_test.sh` against the built engine: handshake, `seldepth`, `searchmoves`, `currmove` and `bench`. |
-| `uci_robustness_test` | Malformed FENs never panic, and `go ponder` never answers before `ponderhit` or `stop`. |
-| `uci_commands_test` | Rust only: every UCI command and option in process, through `process_input` - each `position` form, each `go` keyword and its clock, each `setoption` name and range, the diagnostic commands, `bench`, `quit`, malformed lines and `PAWNSTAR_THREADS`. |
+| `uci_shell_test` | Runs `test/uci_test.sh` against the built engine: handshake, `seldepth`, `searchmoves`, `currmove`, `stop` and `quit` written straight after `go infinite`, malformed `go` values and `bench`. |
+| `uci_robustness_test` | Malformed FENs never panic, `go ponder` never answers before `ponderhit` or `stop`, a `stop` or `quit` written straight after `go infinite` always ends the search, and malformed `go` values are ignored. |
+| `uci_commands_test` | Rust only: every UCI command and option in process, through `process_input` - each `position` form, each `go` keyword and its clock, each `setoption` name and range, the diagnostic commands, `bench`, `quit`, malformed lines and values, `PAWNSTAR_THREADS`, and every command that stops a search sent the instant after `go`, hundreds of times each under a watchdog. |
 | `uci_binary_test` | Rust only: the binary's start-up - the banner, the book and the net found in the working directory, beside the executable, through `PAWNSTAR_EVALFILE` or not at all (the embedded fallbacks) - and `quit`. |
 | `library_api_test` | Rust only: the public helpers the search never calls, the net loader's refusals, the book's in-memory form and display, the material-draw rules and the FEN reader's fallbacks. |
 | `generated_data_test` | Rust only: golden values for the Zobrist keys and magic tables, printed by the C++. A unit test in `src/generated_data.rs` runs the tables' `const` generators at run time and holds them to the tables the compiler baked. |
@@ -669,9 +669,11 @@ Some C++ is intentionally not ported:
 - The book's random pick uses a wall-clock-seeded xorshift* instead of `std::mt19937`. The randomness affects no test
   or gate, since the book is off in `bench` and Bratko-Kopec. `dump_magics`, by contrast, ports `std::mt19937_64`
   exactly, so it reproduces the baked magic constants bit for bit.
-- Numeric option, environment and bench values parse with C++ `atoi` semantics: the leading digits, or 0 if there are
-  none. `go` values differ from the C++ in one case: its `std::stoi` *terminates* on a wholly non-numeric token, where
-  this engine reads 0.
+- Numeric UCI values - `go` values, `setoption` numbers and `bench <depth>` - must be whole integers
+  (`parse_integer`, the rule the C++ `ParseInteger` and Go's `strconv.Atoi` share). A `go` keyword whose value is missing
+  or malformed is ignored with it (`go depth abc` is a plain `go`), an option is left as it was, and `bench` keeps its
+  default depth. The `PAWNSTAR_THREADS` environment variable is still read with C++ `atoi` semantics (the leading
+  digits, or 0 if there are none), as the C++ reads it.
 - On a malformed FEN this engine is defined and safe, where the C++ has istream and indexing quirks. Missing fields
   take sane defaults, and the stream-poisoning on a bad halfmove field is reproduced.
 - The int8 eval dot accumulates in `i32`, which is provably in range and gives identical results, so LLVM vectorises

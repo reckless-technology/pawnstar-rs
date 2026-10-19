@@ -99,6 +99,14 @@ all other `Game` fields are written only via `Engine::game_mut()`, which joins t
 `ponderhit` must never join (it retargets the running search through atomics). Lazy SMP helpers
 are scoped threads in `Game::search_root_node`.
 
+The two stop flags, as in the C++ and Go engines: `is_stop_requested` ("the GUI said stop") is
+written only by the UCI thread and releases the ponder-wait; `is_cancel_pending` (abort; also set
+by the main thread at the end of every search to wind the helpers up) is cleared only by the code
+that starts a search, before it starts it - `start_thinking` before the spawn, `set_position` for
+the direct callers of `search_root_node` - and never by a search thread. When `search_root_node`
+cleared it as it began, a `stop` or `quit` that reached `stop_thinking` before the worker got that
+far was lost and `go infinite` + `stop` hung for ever.
+
 ## Tests
 
 `cargo test` covers everything the C++ `make check` runs: perft (full 131-record EPD to depth 6),
