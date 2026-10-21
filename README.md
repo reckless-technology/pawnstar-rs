@@ -565,25 +565,21 @@ empty.
 
 - **build-test** runs `cargo build/test --release` and checks the bench determinism signature.
 - **coverage** runs every suite under `cargo llvm-cov --release` and fails under 90 % of lines, `src/bin/` left out
-  (see [Coverage](#coverage)). It installs the pinned cargo-llvm-cov into the runner's `~/.cargo` once, and again only
-  when the pin moves.
+  (see [Coverage](#coverage)). It builds the pinned cargo-llvm-cov from crates.io and keeps its binary in the Actions
+  cache under that version, so it is built again only when the pin moves.
 - **format** runs `cargo fmt --check`.
-- **build + test (windows x86_64)** runs the same build and suites on the organisation's self-hosted Windows runners
-  (`[self-hosted, Windows, X64]`). Checking the bench signature on a second platform makes it a cross-platform parity
-  guarantee rather than a Linux-only one.
+- **build + test (windows x86_64)** runs the same build and suites on Windows (MSVC). Checking the bench signature on
+  a second platform makes it a cross-platform parity guarantee rather than a Linux-only one.
 
 The signature the workflow checks is derived from `GOLDEN_TOTAL` in `tests/bench_golden_test.rs`, so the number has
 one home.
 
-The Windows job needs no `dtolnay/rust-toolchain` step. Those runners carry rustup and
-`stable-x86_64-pc-windows-msvc` machine-wide (under `C:\Rust`, so the runner's service account can read them), and
-`rust-toolchain.toml` pins the channel. Its shell is Git Bash 5.x, which satisfies the "bash >= 4 with coproc" probe
-in `tests/uci_shell_test.rs`, so `test/uci_test.sh` really runs there rather than skipping.
-
-**Every job runs on the organisation's own machines**: `[self-hosted, Linux, X64]` for the first three and
-`[self-hosted, Windows, X64]` for the third. No job in this repository uses a GitHub-hosted image. The Linux jobs keep
-their `dtolnay/rust-toolchain` step all the same: unlike the Windows runners, those machines carry no rustup, and that
-action's "install rustup if needed" path bootstraps it.
+**Every job runs on a GitHub-hosted image**, named by its version rather than `-latest`: `ubuntu-24.04` for the first
+three and `windows-2025` for the Windows one. The images are free for a public repository, and each starts empty, so
+every job installs what it needs: `dtolnay/rust-toolchain` brings the stable toolchain `rust-toolchain.toml` names
+(with `llvm-tools` for coverage and `rustfmt` for the format check), and the Windows image carries Visual Studio's C++
+build tools for the MSVC linker. The Windows job's shell is Git Bash 5.x, which satisfies the "bash >= 4 with coproc"
+probe in `tests/uci_shell_test.rs`, so `test/uci_test.sh` really runs there rather than skipping.
 
 ## Versions and releases
 
@@ -606,9 +602,9 @@ builds as `0.0.0`, with a warning.
   nothing.
 
 It refuses a mark that isn't `vMAJOR.MINOR`, a commit not on `main`, and a version already released. Each platform is
-built and tested from nothing on the organisation's self-hosted runners, with the bench signature checked, and each
-shipped binary must report the version. The workflow creates the release `vMAJOR.MINOR.BUILD` and its tag itself. It
-never runs for a pull request.
+built and tested from nothing on GitHub-hosted images (`ubuntu-24.04`, `windows-2025`, `macos-15`), with the bench
+signature checked, and each shipped binary must report the version. The workflow creates the release
+`vMAJOR.MINOR.BUILD` and its tag itself. It never runs for a pull request.
 
 | File | What it is |
 |---|---|

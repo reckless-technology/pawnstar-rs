@@ -2,6 +2,10 @@
 # that locks bit-exact parity with the C++ engine, and the uci_test.sh shell suite), a coverage
 # job (90 % of lines, src/bin/ excepted) and a format job (the whole tree must stay
 # cargo-fmt-clean, like the C++ clang-format gate).
+#
+# Every job runs on a GitHub-hosted image named by its version (ubuntu-24.04, windows-2025),
+# which starts empty each time: dtolnay/rust-toolchain brings the stable toolchain that
+# rust-toolchain.toml names, and each job installs anything else it needs.
 name: CI
 
 on:
@@ -13,7 +17,7 @@ on:
 
 jobs:
   build-test:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,10 +44,10 @@ jobs:
   # instrumented, the UCI shell suite and the binary suites included: the binary they spawn is the
   # instrumented one (CARGO_BIN_EXE_pawnstar), and it inherits cargo-llvm-cov's LLVM_PROFILE_FILE,
   # so main.rs and the UCI handlers count. src/bin/ is left out: dump_magics and stamp_net are
-  # developer tools run by hand, not the engine. cargo-llvm-cov is installed once into the
-  # runner's ~/.cargo, which persists between jobs, and again only when its pinned version moves.
+  # developer tools run by hand, not the engine. cargo-llvm-cov is built from crates.io at its
+  # pinned version and its binary cached under that version, so a run builds it only when the pin moves.
   coverage:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
@@ -51,9 +55,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools
+      - name: cargo-llvm-cov from the cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-llvm-cov
+          key: cargo-llvm-cov-0.9.1-${{ runner.os }}-${{ runner.arch }}
       - name: cargo-llvm-cov
         run: |
-          want=0.9.1
+          want=0.9.1 # and in the cache key above
           if ! cargo llvm-cov --version 2>/dev/null | grep -qx "cargo-llvm-cov $want"; then
             cargo install cargo-llvm-cov --locked --version "$want"
           fi
@@ -62,7 +71,7 @@ jobs:
         run: cargo llvm-cov --release --ignore-filename-regex 'src/bin/' --fail-under-lines 90 --summary-only
 
   format:
-    runs-on: [self-hosted, Linux, X64]
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -70,16 +79,13 @@ jobs:
           components: rustfmt
       - run: cargo fmt --check
 
-  # Windows x86-64 (MSVC toolchain), on the organisation's self-hosted Windows runners — the
-  # same [self-hosted, Windows, X64] pool the C++ and Go ports' artifact-windows jobs use.
-  # No dtolnay/rust-toolchain step here: those runners carry rustup and the
-  # stable-x86_64-pc-windows-msvc toolchain machine-wide (RUSTUP_HOME and CARGO_HOME under
-  # C:\Rust, so the runner's service account can see them), and rust-toolchain.toml already
-  # pins the channel. The shell is Git Bash 5.x, which satisfies the "bash >= 4 with coproc"
-  # probe in tests/uci_shell_test.rs — so the shell suite runs here rather than skipping.
+  # Windows x86-64 (MSVC toolchain), on GitHub's Windows Server 2025 image, which carries
+  # Visual Studio's C++ build tools for the MSVC linker; dtolnay/rust-toolchain brings the same
+  # stable toolchain as on Linux. The shell is Git Bash 5.x, which satisfies the "bash >= 4 with
+  # coproc" probe in tests/uci_shell_test.rs — so the shell suite runs here rather than skipping.
   build-test-windows:
     name: build + test (windows x86_64)
-    runs-on: [self-hosted, Windows, X64]
+    runs-on: windows-2025
     defaults:
       run:
         shell: bash
@@ -87,6 +93,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # the tags and the history: build.rs derives the version from them
+      - uses: dtolnay/rust-toolchain@stable
       - name: Toolchain
         run: |
           rustc --version

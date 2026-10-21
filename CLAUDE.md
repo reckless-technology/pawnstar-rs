@@ -42,14 +42,17 @@ per-position best move / node count / DEBUGX counters). Test-only: `PAWNSTAR_PER
 CI runs the same gates on **Linux and Windows** (`.github/workflows/ci.yml`): `cargo build/test
 --release`, `cargo fmt --check`, and the bench determinism signature on both. The signature is derived
 from `GOLDEN_TOTAL` in `tests/bench_golden_test.rs` — never write a second copy of the number into a
-workflow; that drift once kept CI red for three commits in the sibling repo. Every leg runs on the
-organisation's self-hosted runners: the Windows one uses their preinstalled rustup and needs no toolchain
-action, while the Linux ones keep `dtolnay/rust-toolchain`, which bootstraps rustup where there is none.
-Note `test/uci_test.sh` really executes on Windows (Git Bash is 5.x, so the `coproc` probe passes) rather
-than skipping. The Windows binary links the C runtime statically (`.cargo/config.toml`: `+crt-static` for the MSVC
-target), so it imports Windows' own DLLs alone - KERNEL32, ntdll, bcryptprimitives and the synchronisation API set -
-and needs no Visual C++ redistributable; `tools/windows-dependents.ps1` reads the PE import tables itself and fails
-CI's Windows job and the release's Windows build on any other DLL. A RUSTFLAGS in the environment replaces the
+workflow; that drift once kept CI red for three commits in the sibling repo. Every job, in CI and in the
+release, runs on a GitHub-hosted image named by its version (`ubuntu-24.04`, `windows-2025`, `macos-15`), free for a
+public repository. Each starts empty: `dtolnay/rust-toolchain` brings the stable toolchain `rust-toolchain.toml` names,
+and a job installs anything else it needs (coverage builds the pinned cargo-llvm-cov and caches its binary with
+`actions/cache`). The organisation's Actions policy allows GitHub's own actions, verified creators' and few others -
+`dtolnay/rust-toolchain` among them, `Swatinem/rust-cache` not - and any other action fails the run. Note
+`test/uci_test.sh` really executes on Windows (Git Bash is 5.x, so the `coproc` probe passes) rather than skipping.
+The Windows binary links the C runtime statically (`.cargo/config.toml`: `+crt-static` for the MSVC target), so it
+imports Windows' own DLLs alone - KERNEL32, ntdll, bcryptprimitives and the synchronisation API set - and needs no
+Visual C++ redistributable; `tools/windows-dependents.ps1` reads the PE import tables itself and fails CI's Windows
+job and the release's Windows build on any other DLL. A RUSTFLAGS in the environment replaces the
 config's flags, so no workflow sets one.
 
 **Coverage** (README, "Coverage"): CI's `coverage` job runs every suite under `cargo llvm-cov --release` and fails
