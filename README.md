@@ -603,7 +603,8 @@ builds as `0.0.0`, with a warning.
 
 It refuses a mark that isn't `vMAJOR.MINOR`, a commit not on `main`, and a version already released. Each platform is
 built and tested from nothing on GitHub-hosted images (`ubuntu-24.04`, `windows-2025`, `macos-15`), with the bench
-signature checked, and each shipped binary must report the version. The workflow creates the release
+signature checked, and each shipped binary must report the version. The macOS job installs Homebrew's bash first, since
+the image's own is 3.2 and the UCI shell suite would skip without a bash >= 4. The workflow creates the release
 `vMAJOR.MINOR.BUILD` and its tag itself. It never runs for a pull request.
 
 | File | What it is |

@@ -182,6 +182,18 @@ jobs:
           fetch-depth: 0 # build.rs reads the version from the tags
           fetch-tags: true
       - uses: dtolnay/rust-toolchain@stable
+      # The UCI shell suite needs a bash >= 4 (coproc) and skips without one; macOS's own /bin/bash is 3.2, and the
+      # image has no other, so Homebrew's is installed where tests/uci_shell_test.rs looks first. Linux's bash and
+      # Windows' Git Bash are 5.x already.
+      - name: A bash for the UCI shell suite (macOS)
+        if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSTALL_CLEANUP: 1
+        run: |
+          brew install bash
+          /opt/homebrew/bin/bash -c '[[ ${BASH_VERSINFO[0]} -ge 4 ]] && echo "$BASH_VERSION"' ||
+            { echo "::error::no bash >= 4 at /opt/homebrew/bin/bash: the UCI shell suite would skip"; exit 1; }
       # SSL.com's CodeSignTool, downloaded and held to its pinned version and hash, and the account signed in to and its
       # certificate listed - which spends no signing - before the build rides on it.
       - name: eSigner's signing tool, and the account checked
