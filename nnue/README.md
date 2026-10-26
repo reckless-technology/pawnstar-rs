@@ -1,8 +1,8 @@
 # NNUE net (pawnstar-rs)
 
 `pawnstar-v12.bin` is the shipped evaluation network: a bullet-trained perspective net, 1024-wide
-feature transformer with 8 king buckets (file-pair × board-half), trained on ~6B public
-PlentyChess positions, prepended with the 32-byte `PSN1` header (see `src/nnue.rs::NetHeader`).
+feature transformer with 8 king buckets (file-pair × board-half), trained on ~6B positions of a
+public bulletformat dataset, prepended with the 32-byte `PSN1` header (see `src/nnue.rs::NetHeader`).
 It is **byte-identical to the net shipped by the C++ engine** — the two engines are cross-loadable
 and produce bit-identical evaluations from it.
 
