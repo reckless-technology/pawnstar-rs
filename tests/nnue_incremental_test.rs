@@ -399,9 +399,7 @@ fn nnue_incremental_suite() {
         capture_walk_through_output_heads(&net, &mut checks);
     }
 
-    let net_path = std::env::var("PAWNSTAR_EVALFILE").unwrap_or_else(|_| {
-        concat!(env!("CARGO_MANIFEST_DIR"), "/nnue/pawnstar-v12.bin").to_string()
-    });
+    let net_path = common::shipped_net_path();
     if !std::path::Path::new(&net_path).exists() {
         let failures = common::summary(&format!(
             "INCREMENTAL NNUE: {} checks bit-identical on the synthetic net (no net file supplied)",
