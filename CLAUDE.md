@@ -30,7 +30,20 @@ cargo llvm-cov --release --ignore-filename-regex 'src/bin/' --summary-only   # l
 cargo fmt --check && cargo clippy --release      # style gates (fmt is enforced; clippy advisory)
 cargo run --release --bin stamp_net -- <in> <out>    # stamp a net into RNNUE1 (see nnue/README.md)
 cargo run --release --bin dump_magics
+cargo run --release --bin write_synthetic_net -- <out>   # the new NNUE shape's parity net (nnue/README.md)
+
+# The shared NNUE shape (king mirroring + 8 output heads), in a target directory of its own
+CARGO_TARGET_DIR=target-newshape cargo test --release --features nnue-shared-shape
 ```
+
+**The NNUE shape is a compile-time knob**, the Cargo features `nnue-king-mirroring` and
+`nnue-output-buckets-8` (together `nnue-shared-shape`), defaulting to the v12 shape the shipped net
+was trained for. A new-shape build **refuses** `nnue/pawnstar-v12.bin` naming `format_version`, which
+is the container working rather than a fault, and the suites that need a trained net skip there and
+say so. A shape change is an evaluation change: it moves the bench signature and breaks parity with
+`../pawnstar` and `../pawnstar-go`, so it lands in all three together or not at all. The new shape's
+gate is a node-count signature over a synthetic net rather than `bench` — `nnue/README.md`, "The two
+network shapes".
 
 Profiles: `dev` is opt-level 3 **with overflow checks** (intentional wraps use `wrapping_*`; a
 panic here means a porting bug); `release` matches C++ semantics. Tests inherit dev; run heavy
@@ -118,7 +131,10 @@ far was lost and `go infinite` + `stop` hung for ever.
 
 `cargo test` covers everything the C++ `make check` runs: perft (full 131-record EPD to depth 6),
 SEE (24 cases + fast==reference cross-check), NNUE (bullet reference ±2cp, int8 bound), NNUE
-incremental (bit-identity vs refresh), Bratko-Kopec (hard 24/24 gate at depth 8, single-threaded),
+incremental (bit-identity vs refresh over the shipped net's random walks, plus chosen
+boundary-crossing lines and a generated capture walk through every output head on a synthetic net
+built at this build's shape — the half that runs with no net file and at a shape nothing has been
+trained for), Bratko-Kopec (hard 24/24 gate at depth 8, single-threaded),
 opening book, chess clock, the uci_test.sh shell suite, plus Rust-only gates: table goldens
 (`generated_data_test.rs`, and a unit test running the `const` table generators at run time), the bench golden,
 every UCI command in process (`uci_commands_test.rs`), the fifty-move clock (`fifty_move_clock_test.rs`: castling

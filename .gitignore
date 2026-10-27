@@ -1,1 +1,3 @@
 /target
+# A build at another NNUE shape wants a target directory of its own (nnue/README.md).
+/target-*

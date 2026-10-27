@@ -68,11 +68,9 @@ fn accepted_moves_string(tc: &BkCase) -> String {
 
 #[test]
 fn bratko_kopec_nnue_suite() {
-    let net_path = std::env::var("PAWNSTAR_EVALFILE").unwrap_or_else(|_| {
-        concat!(env!("CARGO_MANIFEST_DIR"), "/nnue/pawnstar-v12.bin").to_string()
-    });
-    if !std::path::Path::new(&net_path).exists() {
-        common::summary("Bratko-Kopec NNUE: skipped (no net supplied)");
+    let net_path = common::shipped_net_path();
+    if !common::is_shipped_net_this_builds_shape() {
+        common::summary("Bratko-Kopec NNUE: skipped (no net of this build's NNUE shape)");
         return;
     }
     let depth: i32 = std::env::var("PAWNSTAR_BK_DEPTH")

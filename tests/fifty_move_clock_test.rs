@@ -48,7 +48,9 @@ fn game_after(fen: &str, moves: &[&str]) -> Box<Game> {
     let mut game = Box::new(Game::new());
     game.thread_count = 1;
     game.use_own_book = false;
-    if std::path::Path::new(NET).exists() {
+    // A build of another NNUE shape refuses this net; the clock rules under test do not depend on
+    // the evaluation, so the game simply runs without one there.
+    if common::is_shipped_net_this_builds_shape() {
         check(
             game.nnue_network.load(NET).is_loaded(),
             "the shipped net loads",

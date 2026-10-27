@@ -264,6 +264,18 @@ impl<'a> SearchState<'a> {
         &self.acc_stack[d]
     }
 
+    /// The current tip position's accumulator, brought current as `current_accumulator` does, and
+    /// the position itself — handed back together because the evaluator reads the side to move and
+    /// the output head from the position the accumulator was maintained for, and taking the two
+    /// from one call is what stops them being read from different places. (Two immutable
+    /// references out of one `&mut self` borrow, which is also what lets the caller hold both:
+    /// `current_accumulator` alone borrows `self` mutably for as long as its result lives.)
+    pub fn current_accumulator_and_position(&mut self) -> (&nnue::Accumulator, &Position) {
+        self.current_accumulator();
+        let d = self.positions.len() - 1;
+        (&self.acc_stack[d], &self.positions[d])
+    }
+
     /// Score moves for ordering, then sort descending.
     /// The score field is a signed 23-bit value shared with the stored TT score. Move ordering
     /// uses, from best to worst:
@@ -1055,18 +1067,17 @@ pub fn evaluate_position(state: &mut SearchState) -> i32 {
     // The cached value is the RAW, clock-independent NNUE eval: the Zobrist hash excludes the
     // fifty-move clock, so the same position can be probed at different clock values. The
     // fifty-move scaling is therefore applied AFTER the cache, on the way out — never stored.
-    let (hash, reversible_move_count, color_to_move) = {
+    let (hash, reversible_move_count) = {
         let p = state.current_position();
-        (p.hash, p.reversible_move_count, p.color_to_move)
+        (p.hash, p.reversible_move_count)
     };
     if let Some(raw) = state.game.eval_cache.probe(hash) {
         increment!("eval hash hits");
         return scale_by_rule50(raw, reversible_move_count as i32);
     }
     let game = state.game; // copy the shared reference out so the accumulator borrow below is independent
-    let raw = game
-        .nnue_network
-        .evaluate(state.current_accumulator(), color_to_move);
+    let (accumulator, position) = state.current_accumulator_and_position();
+    let raw = game.nnue_network.evaluate(accumulator, position);
     game.eval_cache.store(hash, raw);
     scale_by_rule50(raw, reversible_move_count as i32)
 }

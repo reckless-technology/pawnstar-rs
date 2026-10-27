@@ -39,11 +39,12 @@ const GOLDEN_TOTAL: u64 = 6_601_454;
 
 #[test]
 fn bench_matches_cpp_golden_signature() {
-    let net_path = std::env::var("PAWNSTAR_EVALFILE").unwrap_or_else(|_| {
-        concat!(env!("CARGO_MANIFEST_DIR"), "/nnue/pawnstar-v12.bin").to_string()
-    });
-    if !std::path::Path::new(&net_path).exists() {
-        common::summary("BENCH GOLDEN: skipped (no net supplied)");
+    let net_path = common::shipped_net_path();
+    // The signature belongs to this net at this shape. A build at another NNUE shape refuses the
+    // net outright, so there is no bench to compare: that shape's gate is the node-count signature
+    // in nnue/README.md, measured over the synthetic net.
+    if !common::is_shipped_net_this_builds_shape() {
+        common::summary("BENCH GOLDEN: skipped (no net of this build's NNUE shape)");
         return;
     }
     let mut game = Box::new(Game::new());

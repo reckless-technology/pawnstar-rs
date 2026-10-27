@@ -37,6 +37,7 @@ counters (DEBUGX) are compiled in by default; `--no-default-features` leaves the
 ```bash
 cargo run --release --bin stamp_net -- <in.bin> <stamped.bin>    # stamp a trainer net into the RNNUE1 container
 cargo run --release --bin dump_magics                            # regenerate the magic multipliers
+cargo run --release --bin write_synthetic_net -- <out.bin>        # the new NNUE shape's parity net (nnue/README.md)
 cargo run --release --example nnue_dump < fens.txt               # raw evals for FENs (cross-engine eval parity)
 cargo doc --open                                                 # API documentation (the C++ `make doc`)
 ```
@@ -91,8 +92,8 @@ cargo llvm-cov --release --ignore-filename-regex 'src/bin/' --html --open    # l
 ```
 
 CI fails a pull request under **90 % of lines** (the `coverage` job). The figure covers the engine library and the
-`pawnstar` binary - everything under `src/` but `src/bin/`, whose `dump_magics` and `stamp_net` are developer tools
-run by hand and are left out. Every suite runs instrumented, the binary suites included: the `pawnstar` they spawn is
+`pawnstar` binary - everything under `src/` but `src/bin/`, whose `dump_magics`, `stamp_net` and
+`write_synthetic_net` are developer tools run by hand and are left out. Every suite runs instrumented, the binary suites included: the `pawnstar` they spawn is
 the instrumented build, and it inherits cargo-llvm-cov's `LLVM_PROFILE_FILE`, so `main.rs` and the UCI handlers
 count. An instrumented search is many times slower than a release one, so the whole run takes a while (the bench
 golden alone some minutes).
@@ -469,9 +470,21 @@ bank is the king's file pair (a–b, c–d, e–f, g–h), plus 4 when the king 
 The file pairs follow king safety and the castled king's pawn shelter; the rank split separates a sheltered king from
 an active one.
 
-**Feature index.** For the white perspective a piece's row is `bucket·768 + colour·384 + (type − 1)·64 + square`. The
-black perspective swaps the colour and flips the square (`^ 0x38`). The feature-transformer weights are 6144 × 1024
-`i16`, 12.6 MB, held in one 64-byte-aligned heap allocation.
+**Two shapes, one tree.** The shared architecture every reckless-technology chess engine is moving onto adds
+horizontal **king mirroring** (a perspective whose own king stands on files e–h is mirrored, `square ^ 7`, before
+indexing, and the map becomes `half·4 + min(file, 7 − file)` — per file rather than per file pair) and **8 material
+output heads** (`(piece_count − 2) / 4`). Both are compile-time: the Cargo features `nnue-king-mirroring` and
+`nnue-output-buckets-8`, together `nnue-shared-shape`, defaulting off to v12's shape. They are stamped into every
+net's header, so a net only ever loads into a build of its own shape. A shape change is an evaluation change, so it
+lands in `pawnstar`, `pawnstar-rs` and `pawnstar-go` together or not at all. See
+[nnue/README.md](nnue/README.md), "The two network shapes".
+
+**Feature index.** A piece's row is `bank + (colour ^ colour_flip)·384 + (type − 1)·64 + (square ^ square_flip)`,
+where the bank, the square flip (`^ 0x38` for the black perspective, plus `^ 0x07` when mirrored) and the colour flip
+are one `nnue::Perspective` value. They are gathered into one value because the incremental update is valid only
+while all three stay put, and comparing just the bank is **silently** wrong once mirroring is on: a king stepping
+d1 → e1 keeps its bucket while every row it reads moves. The feature-transformer weights are 6144 × 1024 `i16`,
+12.6 MB, held in one 64-byte-aligned heap allocation.
 
 **The accumulator** is two 1024-wide `i16` arrays, one per perspective, maintained **incrementally and lazily**.
 `play_move` and `make_null_move` only mark the new ply stale, and `undo_move` does nothing. `current_accumulator`
@@ -481,9 +494,10 @@ RFP, null move or LMP) pays nothing.
 
 `Network::update` finds the changed squares straight from the parent's and child's colour bitboards. A move changes
 two to four of them, and captures, en passant, castling and promotion all fall out the same way. Only those columns
-are added or subtracted, in both perspectives. A king move that crosses into another bucket changes that
-perspective's whole bank, so that side is rebuilt from scratch and the other is diffed. The `i16` arithmetic wraps
-(`wrapping_add` / `wrapping_sub`), as the C++ does.
+are added or subtracted, in both perspectives. A king move that changes its perspective's bank *or its mirroring*
+moves every row that perspective reads, so that side is rebuilt from scratch and the other is diffed — one comparison
+of the whole `Perspective`, which cannot miss either case. The `i16` arithmetic wraps (`wrapping_add` /
+`wrapping_sub`), as the C++ does.
 
 **The output layer** runs in **int8** on the search's path (`evaluate`):
 

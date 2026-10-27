@@ -63,8 +63,11 @@ fn quiet_engine() -> Engine {
     engine
 }
 
+/// Whether a net this build can read is there: present, and of this build's NNUE shape. A build at
+/// another shape refuses the shipped net, naming the field that disagreed, so the checks that need
+/// a loadable net stand down there — the refusal itself is covered by nnue_container_test.
 fn net_present() -> bool {
-    std::path::Path::new(NET).exists()
+    std::path::Path::new(NET).exists() && pawnstar::nnue::Network::default().load(NET).is_loaded()
 }
 
 /// `parse_integer`: the strict rule every numeric option and `go` value is read with; anything but
