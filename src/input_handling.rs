@@ -159,8 +159,19 @@ fn handle_setoption(engine: &mut Engine, args: &[String]) {
     }
     let game = engine.game_mut();
     if name == "EvalFile" {
-        game.nnue_network.load(&value);
-        game.eval_cache.clear(); // cached evals belong to the previous net
+        // A refused net is not substituted for the one already playing, and does not leave the
+        // engine with no evaluator at all: the loader has said which field disagreed, and the net
+        // loaded before this command stays loaded. (Without that, a mismatched EvalFile left the
+        // network unloaded, the engine still answered `readyok`, and the first `go` had no
+        // evaluator.) Only a net that actually loaded invalidates the cached evaluations.
+        if game.nnue_network.load(&value).is_loaded() {
+            game.eval_cache.clear(); // cached evals belong to the previous net
+        } else if game.nnue_network.loaded {
+            uci_println!(
+                "info string NNUE: '{}' was not loaded; the net already loaded stays in use",
+                value
+            );
+        }
     } else if name == "Hash" {
         // A malformed value (parse_integer) leaves each numeric option as it is.
         if let Some(mb) = parse_integer(&value) {

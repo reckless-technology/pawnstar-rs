@@ -11,6 +11,7 @@ pub mod bitboard;
 pub mod castling_rights;
 pub mod chess_clock;
 pub mod constants;
+pub mod crc64;
 pub mod debug_hashtable;
 pub mod eval_cache;
 pub mod evaluation;

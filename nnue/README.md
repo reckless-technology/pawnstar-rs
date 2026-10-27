@@ -2,9 +2,16 @@
 
 `pawnstar-v12.bin` is the shipped evaluation network: a bullet-trained perspective net, 1024-wide
 feature transformer with 8 king buckets (file-pair × board-half), trained on ~6B positions of a
-public bulletformat dataset, prepended with the 32-byte `PSN1` header (see `src/nnue.rs::NetHeader`).
-It is **byte-identical to the net shipped by the C++ engine** — the two engines are cross-loadable
-and produce bit-identical evaluations from it.
+public bulletformat dataset, in the shared Reckless NNUE container `RNNUE1` — a 64-byte
+self-describing header (see `src/nnue.rs::NetHeader`) and a 12,589,060-byte payload, with a
+CRC-64/XZ over each. It is **byte-identical to the net shipped by the C++ and Go engines** — all
+three are cross-loadable and produce bit-identical evaluations from it.
+
+The container is the one every reckless-technology chess engine reads; the `reckless-nnue` skill is
+its specification. This engine is compiled for the container's current shape with king mirroring
+off (`flags = 0`) and one output head (`output_buckets = 1`); horizontal king mirroring and
+material output buckets are separate, strength-affecting changes owed to all three pawnstar ports
+at once, and a net that asks for either is refused.
 
 **This file is a shared asset, not a Rust artifact.** Everything about producing a net — the
 bullet trainer setup, data pipeline, quantisation, verification, SPRT testing, and the full
@@ -17,8 +24,10 @@ trained once and shipped to both engines.
 After following the C++ checklist (train → `stamp_net` → regenerate references → SPRT):
 
 1. Replace `nnue/pawnstar-v12.bin` (the loader validates the stamped header against the engine
-   constants in `src/nnue.rs`; an arch change means updating those constants in lock-step with
-   the C++ `nnue.h`).
+   constants in `src/nnue.rs`, and the header's king-bucket map checksum against the checksum of
+   this engine's own `KING_BUCKET_MAP`; an arch change means updating those constants in lock-step
+   with the C++ `nnue.h`, the Go engine, and the container's `format_version` if a bucket's
+   *meaning* changes).
 2. Copy the regenerated `test/nnue_reference.txt` from the C++ repo to `tests/nnue_reference.txt`
    (the bullet cross-check evals are net-specific).
 3. Update the Bratko-Kopec accepted-move sets in `tests/bratko_kopec_nnue_test.rs` to match the

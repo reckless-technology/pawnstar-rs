@@ -14,7 +14,7 @@ use pawnstar::chess_clock::{ChessClock, ClockType};
 use pawnstar::constants::{Color, Piece};
 use pawnstar::history_table::HistoryTable;
 use pawnstar::moves::{Move, MoveList, NodeType};
-use pawnstar::nnue::{expected_net_header, NetHeader, Network, NET_HEADER_BYTES};
+use pawnstar::nnue::{expected_net_header, NetHeader, NetLoadOutcome, Network, NET_HEADER_BYTES};
 use pawnstar::opening_book::OpeningBook;
 use pawnstar::position::Position;
 use pawnstar::square::Square;
@@ -178,39 +178,46 @@ fn test_transposition_table() {
 fn test_net_header_and_loader() {
     let header = expected_net_header();
     let bytes = header.to_bytes();
-    check(bytes.len() == NET_HEADER_BYTES, "the header is 32 bytes");
+    check(bytes.len() == NET_HEADER_BYTES, "the header is 64 bytes");
     check(
         NetHeader::from_bytes(&bytes) == header,
         "the header round-trips",
     );
     check(
-        bytes[18..].iter().all(|&b| b == 0),
-        "the header pads with zeros",
+        bytes[28..32].iter().all(|&byte| byte == 0),
+        "the reserved field is zero",
     );
 
     let mut net = Network::default();
     check(!net.loaded, "a default network is unloaded");
-    check(!net.load("no/such/net.bin"), "a missing file is refused");
-    check(!net.load("nnue"), "a directory is refused");
     check(
-        !net.load_from_memory(b"", "empty"),
+        net.load("no/such/net.bin") == NetLoadOutcome::FileUnavailable,
+        "a missing file is unavailable, not refused",
+    );
+    check(
+        net.load("nnue") == NetLoadOutcome::FileUnavailable,
+        "a directory is unavailable, not refused",
+    );
+    check(
+        net.load_from_memory(b"", "empty") == NetLoadOutcome::Refused,
         "an empty image is refused",
     );
     check(
-        !net.load_from_memory(&[0u8; 64], "raw"),
+        net.load_from_memory(&[0u8; 64], "raw") == NetLoadOutcome::Refused,
         "an unstamped image is refused",
     );
 
     let mut wrong = header;
     wrong.hidden_size = 512;
     check(
-        !net.load_from_memory(&wrong.to_bytes(), "wrong"),
+        net.load_from_memory(&wrong.with_header_crc().to_bytes(), "wrong")
+            == NetLoadOutcome::Refused,
         "an image of another architecture is refused",
     );
-    let mut truncated = bytes.to_vec();
+    let mut truncated = header.with_header_crc().to_bytes().to_vec();
     truncated.extend_from_slice(&[0u8; 100]);
     check(
-        !net.load_from_memory(&truncated, "truncated"),
+        net.load_from_memory(&truncated, "truncated") == NetLoadOutcome::Refused,
         "a truncated image is refused",
     );
     check(!net.loaded, "a refused net leaves the network unloaded");

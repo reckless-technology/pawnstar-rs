@@ -304,6 +304,27 @@ fn test_setoption() {
             engine.game().nnue_network.loaded,
             "EvalFile loads the shipped net",
         );
+
+        // A refused net neither replaces the net already playing nor leaves the engine with none:
+        // a mismatched EvalFile once left the network unloaded while the engine still answered
+        // `readyok`, and the first `go` then had no evaluator at all.
+        let mut image = std::fs::read(NET).expect("the shipped net");
+        let at = image.len() / 2;
+        image[at] ^= 0x01;
+        let corrupt = std::env::temp_dir().join(format!(
+            "pawnstar-commands-test-{}-corrupt-net.bin",
+            std::process::id()
+        ));
+        std::fs::write(&corrupt, &image).expect("write the corrupt net");
+        run(
+            &mut engine,
+            &format!("setoption name EvalFile value {}", corrupt.display()),
+        );
+        check(
+            engine.game().nnue_network.loaded,
+            "a refused EvalFile keeps the net already loaded",
+        );
+        let _ = std::fs::remove_file(&corrupt);
     }
 
     // Grammar: no name, no value, an unknown name, words before `name`, and a value of two words.

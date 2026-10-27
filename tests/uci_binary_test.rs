@@ -19,8 +19,21 @@ fn check(condition: bool, message: &str) {
 }
 
 /// Run `engine` in `cwd` with `envs`, feed it `input`, close stdin and return its stdout and
-/// stderr once it exits.
+/// stderr once it exits, checking that it exited cleanly.
 fn run_engine(engine: &Path, cwd: &Path, envs: &[(&str, &str)], input: &str) -> (String, String) {
+    let (exited_cleanly, out, err) = run_engine_allowing_failure(engine, cwd, envs, input);
+    check(exited_cleanly, "the engine exits cleanly");
+    (out, err)
+}
+
+/// The same, for the cases that are *meant* to fail: a refused net stops the engine, so its exit
+/// status is part of what is asserted rather than a precondition of the run.
+fn run_engine_allowing_failure(
+    engine: &Path,
+    cwd: &Path,
+    envs: &[(&str, &str)],
+    input: &str,
+) -> (bool, String, String) {
     let mut command = Command::new(engine);
     command
         .current_dir(cwd)
@@ -38,8 +51,8 @@ fn run_engine(engine: &Path, cwd: &Path, envs: &[(&str, &str)], input: &str) -> 
         stdin.write_all(input.as_bytes()).expect("engine stdin");
     } // dropped: the engine sees the end of input
     let output = child.wait_with_output().expect("engine output");
-    check(output.status.success(), "the engine exits cleanly");
     (
+        output.status.success(),
         String::from_utf8_lossy(&output.stdout).into_owned(),
         String::from_utf8_lossy(&output.stderr).into_owned(),
     )
@@ -232,10 +245,61 @@ fn test_quit() {
     check(!has_line(&out, "readyok"), "nothing after quit is read");
 }
 
+/// A net that is *there* and fails one of the container's checks stops the engine. It must not be
+/// quietly replaced by the embedded net: an engine that substituted one would play a whole match
+/// on weights nobody asked for, and the match would report a plausible Elo for a net that never
+/// played a move.
+fn test_refused_net_does_not_fall_back() {
+    let net = Path::new(MANIFEST_DIR)
+        .join("nnue")
+        .join("pawnstar-v12.bin");
+    let Ok(mut image) = std::fs::read(&net) else {
+        check(
+            true,
+            "the shipped net is absent; the refusal case is skipped",
+        );
+        return;
+    };
+    // One flipped bit deep in the weights: the header still describes this engine's architecture
+    // exactly, so only the payload's checksum catches it.
+    let at = image.len() / 2;
+    image[at] ^= 0x01;
+    let dir = scratch("refused");
+    let corrupt = dir.join("corrupt-net.bin");
+    std::fs::write(&corrupt, &image).expect("write the corrupt net");
+    let corrupt = corrupt.to_string_lossy().into_owned();
+
+    let (exited_cleanly, out, err) = run_engine_allowing_failure(
+        Path::new(ENGINE),
+        Path::new(MANIFEST_DIR),
+        &[("PAWNSTAR_EVALFILE", &corrupt)],
+        "position startpos\neval\n",
+    );
+    check(
+        err.contains("refused: payload_crc is"),
+        "the refusal names payload_crc and both values",
+    );
+    check(
+        !out.contains("falling back to the embedded net"),
+        "a refused net is not replaced by the embedded one",
+    );
+    check(
+        out.contains("was refused"),
+        "the engine says on stdout that the net was refused",
+    );
+    check(!exited_cleanly, "the engine stops rather than playing on");
+    check(
+        !has_line(&out, "evaluation "),
+        "nothing is evaluated with a refused net",
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn uci_binary_suite() {
     test_start_in_repo();
     test_evalfile_override();
+    test_refused_net_does_not_fall_back();
     test_embedded_fallbacks();
     test_resources_beside_the_executable();
     test_broken_book_falls_back();

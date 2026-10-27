@@ -47,7 +47,10 @@ fn bench_matches_cpp_golden_signature() {
         return;
     }
     let mut game = Box::new(Game::new());
-    assert!(game.nnue_network.load(&net_path), "failed to load net");
+    assert!(
+        game.nnue_network.load(&net_path).is_loaded(),
+        "failed to load net"
+    );
     // The `bench` recipe: single-threaded, book off, TT + eval cache cleared up front.
     game.thread_count = 1;
     game.use_own_book = false;

@@ -88,7 +88,7 @@ fn bratko_kopec_nnue_suite() {
     if std::env::var("PAWNSTAR_THREADS").is_err() {
         game.thread_count = 1;
     }
-    if !game.nnue_network.load(&net_path) || !game.nnue_network.loaded {
+    if !game.nnue_network.load(&net_path).is_loaded() || !game.nnue_network.loaded {
         common::check(
             false,
             &format!("Bratko-Kopec NNUE: failed to load net '{}'", net_path),

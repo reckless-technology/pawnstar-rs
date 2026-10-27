@@ -89,7 +89,7 @@ fn nnue_incremental_suite() {
     }
     // Load the net into a Game; SearchState then maintains the accumulator incrementally.
     let mut game = Box::new(Game::new());
-    if !game.nnue_network.load(&net_path) || !game.nnue_network.loaded {
+    if !game.nnue_network.load(&net_path).is_loaded() || !game.nnue_network.loaded {
         common::check(
             false,
             &format!("incremental NNUE: failed to load net '{}'", net_path),
