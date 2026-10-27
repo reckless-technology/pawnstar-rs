@@ -14,11 +14,12 @@ mod common;
 
 use pawnstar::crc64;
 use pawnstar::nnue::{
-    expected_net_header, king_bucket_map_crc, synthetic_net_image, NetHeader, NetLoadOutcome,
-    Network, HIDDEN_SIZE, INPUT_SIZE, IS_KING_MIRRORING_ENABLED, KING_BUCKET_MAP,
-    NET_ACTIVATION_SCRELU, NET_FLAGS, NET_FLAG_HORIZONTAL_KING_MIRRORING, NET_FORMAT_VERSION,
-    NET_HEADER_BYTES, NET_HEADER_CHECKSUMMED_BYTES, NET_MAGIC, NET_PAYLOAD_BYTES,
-    NET_TRAINER_PAYLOAD_BYTES, NUM_KING_BUCKETS, NUM_OUTPUT_BUCKETS, QA, QB, SCALE,
+    expand_mirrored_king_bucket_map, expected_net_header, king_bucket_map_crc, synthetic_net_image,
+    NetHeader, NetLoadOutcome, Network, HIDDEN_SIZE, INPUT_SIZE, IS_KING_MIRRORING_ENABLED,
+    KING_BUCKET_MAP, KING_BUCKET_MAP_HALF, NET_ACTIVATION_SCRELU, NET_FLAGS,
+    NET_FLAG_HORIZONTAL_KING_MIRRORING, NET_FORMAT_VERSION, NET_HEADER_BYTES,
+    NET_HEADER_CHECKSUMMED_BYTES, NET_MAGIC, NET_PAYLOAD_BYTES, NET_TRAINER_PAYLOAD_BYTES,
+    NUM_KING_BUCKETS, NUM_OUTPUT_BUCKETS, QA, QB, SCALE,
 };
 
 /// The shipped net, which the NNUE suites skip when it is absent (the C++ exit-0 contract).
@@ -229,6 +230,29 @@ fn test_header_layout() {
     check(
         crc64::checksum(&shuffled) != king_bucket_map_crc(),
         "a map of the same eight buckets in another order checksums differently",
+    );
+
+    // The mirrored 64-entry map really is bullet's expansion of the 32 half-board numbers, run
+    // here at run time (the engine evaluates it at compile time, so nothing else would execute
+    // it): `expanded[sq] = half[(sq / 8) * 4 + [0,1,2,3,3,2,1,0][sq % 8]]`. The trainer is handed
+    // the same 32, so proving the expansion proves the two 64-entry maps equal — the half of the
+    // drift risk king_bucket_map_crc cannot see, since the digest binds a net to the build that
+    // stamped it and says nothing about the trainer.
+    let expanded = expand_mirrored_king_bucket_map();
+    let mut expansion_matches = true;
+    for square in 0..64usize {
+        let file = square % 8;
+        let mirrored_file = if file < 4 { file } else { 7 - file };
+        expansion_matches &=
+            expanded[square] == KING_BUCKET_MAP_HALF[(square / 8) * 4 + mirrored_file];
+    }
+    check(
+        expansion_matches,
+        "the 64-entry mirrored map is bullet's expansion of the 32-entry one",
+    );
+    check(
+        !IS_KING_MIRRORING_ENABLED || KING_BUCKET_MAP == expanded,
+        "a mirroring build indexes that expanded map",
     );
 }
 
