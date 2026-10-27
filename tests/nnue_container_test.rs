@@ -14,14 +14,18 @@ mod common;
 
 use pawnstar::crc64;
 use pawnstar::nnue::{
-    expected_net_header, king_bucket_map_crc, NetHeader, NetLoadOutcome, Network, HIDDEN_SIZE,
-    INPUT_SIZE, KING_BUCKET_MAP, NET_ACTIVATION_SCRELU, NET_FLAGS, NET_FORMAT_VERSION,
+    expected_net_header, king_bucket_map_crc, synthetic_net_image, NetHeader, NetLoadOutcome,
+    Network, HIDDEN_SIZE, INPUT_SIZE, IS_KING_MIRRORING_ENABLED, KING_BUCKET_MAP,
+    NET_ACTIVATION_SCRELU, NET_FLAGS, NET_FLAG_HORIZONTAL_KING_MIRRORING, NET_FORMAT_VERSION,
     NET_HEADER_BYTES, NET_HEADER_CHECKSUMMED_BYTES, NET_MAGIC, NET_PAYLOAD_BYTES,
     NET_TRAINER_PAYLOAD_BYTES, NUM_KING_BUCKETS, NUM_OUTPUT_BUCKETS, QA, QB, SCALE,
 };
 
 /// The shipped net, which the NNUE suites skip when it is absent (the C++ exit-0 contract).
 const NET: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/nnue/pawnstar-v12.bin");
+
+/// Whether this build is the shape the shipped net was trained for: mirroring off, one output head.
+const IS_V12_SHAPE: bool = !IS_KING_MIRRORING_ENABLED && NUM_OUTPUT_BUCKETS == 1;
 
 fn check(condition: bool, message: &str) {
     common::check(condition, message);
@@ -69,9 +73,21 @@ fn test_header_layout() {
         "header_crc covers bytes 0..55",
     );
     check(&bytes[0..8] == b"RNNUE1\0\0", "offset 0: the magic");
+    // format_version is 2 with mirroring on, 1 with it off: the mirrored map changes what a bucket
+    // means, not only how many there are, and the container's rule is that the map's contents are
+    // part of the architecture. king_bucket_map_crc would catch a mix-up anyway, but the version
+    // says plainly that the two are different formats rather than two nets of one format.
     check(
-        u16::from_le_bytes([bytes[8], bytes[9]]) == 1,
-        "offset 8: format_version 1",
+        u16::from_le_bytes([bytes[8], bytes[9]]) == if IS_KING_MIRRORING_ENABLED { 2 } else { 1 },
+        &format!(
+            "offset 8: format_version {} with king mirroring {}",
+            NET_FORMAT_VERSION,
+            if IS_KING_MIRRORING_ENABLED {
+                "on"
+            } else {
+                "off"
+            }
+        ),
     );
     check(
         u16::from_le_bytes([bytes[10], bytes[11]]) == 64,
@@ -90,12 +106,20 @@ fn test_header_layout() {
         "offset 16: hidden_size 1024",
     );
     check(
-        u16::from_le_bytes([bytes[18], bytes[19]]) == 1,
-        "offset 18: output_buckets 1 (material buckets are a later change)",
+        u16::from_le_bytes([bytes[18], bytes[19]]) == NUM_OUTPUT_BUCKETS as u16,
+        &format!("offset 18: output_buckets {}", NUM_OUTPUT_BUCKETS),
     );
     check(
-        bytes[20] == 0,
-        "offset 20: flags 0 (king mirroring is a later change)",
+        bytes[20] == if IS_KING_MIRRORING_ENABLED { 1 } else { 0 },
+        &format!(
+            "offset 20: flags {:#04x}, king mirroring {}",
+            NET_FLAGS,
+            if IS_KING_MIRRORING_ENABLED {
+                "on"
+            } else {
+                "off"
+            }
+        ),
     );
     check(bytes[21] == 0, "offset 21: activation 0, SCReLU");
     check(
@@ -145,14 +169,42 @@ fn test_header_layout() {
     );
 
     // 8 * 768 * 1024 int16 feature weights, 1024 int16 feature biases, 2 * 1024 int16 output
-    // weights per output bucket, one int32 output bias per output bucket.
+    // weights per output bucket, one int32 output bias per output bucket: 12,589,060 bytes at
+    // v12's shape and 12,617,760 at the shared one, both named in the container specification.
     check(
-        NET_PAYLOAD_BYTES == 12_582_912 + 2_048 + 4_096 + 4,
-        "the payload is 12,589,060 bytes at this shape",
+        NET_PAYLOAD_BYTES
+            == 12_582_912 + 2_048 + NUM_OUTPUT_BUCKETS * 4_096 + NUM_OUTPUT_BUCKETS * 4,
+        &format!("the payload is {} bytes at this shape", NET_PAYLOAD_BYTES),
+    );
+    // And the two sizes the container specification names outright, so a layout change that is
+    // self-consistent but wrong is still caught.
+    check(
+        NET_PAYLOAD_BYTES
+            == match NUM_OUTPUT_BUCKETS {
+                1 => 12_589_060,
+                8 => 12_617_760,
+                _ => NET_PAYLOAD_BYTES,
+            },
+        "the payload size is the one the container specification names for this many output heads",
     );
     check(
-        NET_TRAINER_PAYLOAD_BYTES == NET_PAYLOAD_BYTES - 2,
+        NET_TRAINER_PAYLOAD_BYTES == NET_PAYLOAD_BYTES - NUM_OUTPUT_BUCKETS * 2,
         "the trainer writes the same weights with int16 output biases",
+    );
+    // The map digest both other implementations of this shape independently arrived at. It binds
+    // the map's *contents* — the thing that changes meaning when mirroring is turned on — so a map
+    // that drifted from the shared specification fails here rather than in a trained net's header.
+    check(
+        king_bucket_map_crc()
+            == if IS_KING_MIRRORING_ENABLED {
+                0x0A20_060D_4E95_86E0
+            } else {
+                0xCC6D_DB5D_AF0A_B18D
+            },
+        &format!(
+            "king_bucket_map_crc is {:#018x}, the published value for this build's map",
+            king_bucket_map_crc()
+        ),
     );
 
     let stamped = header.with_header_crc();
@@ -170,8 +222,10 @@ fn test_header_layout() {
         king_bucket_map_crc() == crc64::checksum(&entries),
         "the map's checksum is taken over the 64 entries, one uint8 each",
     );
+    // a1 and c1 are in different buckets under both maps (the mirrored map sends a1 and h1 to the
+    // same one, so swapping those two would be no change at all and would check nothing).
     let mut shuffled = entries;
-    shuffled.swap(0, 7);
+    shuffled.swap(0, 2);
     check(
         crc64::checksum(&shuffled) != king_bucket_map_crc(),
         "a map of the same eight buckets in another order checksums differently",
@@ -214,11 +268,12 @@ fn test_shipped_net(image: &[u8]) {
 }
 
 /// Every refusal the two checks make, each one leaving the net that is already loaded playing.
+/// `image` is the synthetic net at this build's shape, so this runs at either shape.
 fn test_refusals(image: &[u8]) {
     // A net that is already loaded, so each refusal can be checked not to disturb it.
     let mut net = Network::default();
     check(
-        net.load_from_memory(image, "shipped").is_loaded(),
+        net.load_from_memory(image, "synthetic").is_loaded(),
         "a good net is loaded before the refusals",
     );
     let start_position = pawnstar::position::Position::from_string(
@@ -257,10 +312,15 @@ fn test_refusals(image: &[u8]) {
     ));
     cases.push(("king_buckets", restamp(&|h| h.king_buckets = 4)));
     cases.push(("hidden_size", restamp(&|h| h.hidden_size = 512)));
-    cases.push(("output_buckets", restamp(&|h| h.output_buckets = 8)));
     cases.push((
-        "flags (king mirroring asked for)",
-        restamp(&|h| h.flags = 1),
+        "output_buckets",
+        restamp(&|h| h.output_buckets = NUM_OUTPUT_BUCKETS as u16 + 1),
+    ));
+    // Flip the mirroring bit whichever way this build has it: a mirrored net must not load into an
+    // unmirrored build, nor the reverse — the two read entirely different feature rows.
+    cases.push((
+        "flags (the other shape's king mirroring)",
+        restamp(&|h| h.flags ^= NET_FLAG_HORIZONTAL_KING_MIRRORING),
     ));
     cases.push(("activation", restamp(&|h| h.activation = 1)));
     cases.push(("qa", restamp(&|h| h.qa = 181)));
@@ -307,11 +367,17 @@ fn test_refusals(image: &[u8]) {
 fn nnue_container_suite() {
     test_crc64();
     test_header_layout();
+    // The refusals are walked over the **synthetic** net, which is at whatever shape this build was
+    // configured for, so this half runs at either shape and in a checkout with no .bin. The shipped
+    // net is v12's shape, and a build of another shape rightly refuses it — which is the container
+    // working, not a fault, so its own checks are skipped there rather than failed.
+    test_refusals(&synthetic_net_image());
     match shipped_net_image() {
-        Some(image) => {
-            test_shipped_net(&image);
-            test_refusals(&image);
-        }
+        Some(image) if IS_V12_SHAPE => test_shipped_net(&image),
+        Some(_) => println!(
+            "[PASS] the shipped net is v12's shape, which this build is not; its container checks \
+             are skipped (the synthetic net covers the refusals)"
+        ),
         None => println!("[PASS] the shipped net is absent; its container checks are skipped"),
     }
     assert_eq!(

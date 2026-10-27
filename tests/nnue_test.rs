@@ -27,8 +27,10 @@ fn net_path() -> String {
 fn nnue_suite() {
     let net_file = net_path();
     let reference_file = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/nnue_reference.txt");
-    if !std::path::Path::new(&net_file).exists() {
-        common::summary("NNUE: skipped (no net/reference supplied)");
+    // The reference evals are this net's, so a build of another NNUE shape — which refuses the net
+    // anyway — has nothing to cross-check against.
+    if !common::is_shipped_net_this_builds_shape() {
+        common::summary("NNUE: skipped (no net of this build's NNUE shape, or no reference)");
         return;
     }
     let mut net = Box::new(Network::new());

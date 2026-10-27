@@ -13,6 +13,13 @@
 //! bank by *its own* king's square (in that perspective's orientation), the feature row being
 //! `bucket * 768 + chess768_index`, matching bullet's `ChessBuckets`.
 //!
+//! Two parts of the shape are **compile-time knobs**, the Cargo features
+//! `nnue-king-mirroring` and `nnue-output-buckets-8` (together, `nnue-shared-shape`), so that
+//! either shape can be built from one tree while the three bit-exact ports are brought across one
+//! at a time. The defaults are v12's shape; the shared architecture every reckless-technology
+//! chess engine is moving onto adds horizontal king mirroring and eight material output heads.
+//! Both are stamped into every net's header, so a net can only load into a build of its own shape.
+//!
 //! This port ships the scalar kernels, which the C++ documents (and tests) as bit-identical to its
 //! AVX2/VNNI kernels; x86 SIMD is a later parity-locked perf phase.
 
@@ -21,53 +28,104 @@ use crate::crc64;
 use crate::position::Position;
 
 pub const INPUT_SIZE: usize = 768; // Features per perspective per bucket: 2 colors * 6 types * 64 squares.
-pub const NUM_KING_BUCKETS: usize = 8; // King-square weight banks (1 = single bank, i.e. no king buckets).
-pub const FEATURE_ROWS: usize = INPUT_SIZE * NUM_KING_BUCKETS; // Feature-transformer input rows (bucket-major).
 pub const HIDDEN_SIZE: usize = 1024; // Feature-transformer / accumulator width per perspective.
+
+/// Whether a perspective whose own king stands on files e-h is horizontally mirrored
+/// (`square ^ FILE_FLIP`) before indexing. Measured in zenith at **+14.3 Elo** at fixed depth, and
+/// worth more than that number suggests: halving the king-placement space gives twice the
+/// effective data per bucket at the same file size, so it is a data multiplier as much as an Elo
+/// add. It only paid past ~1.4B training positions, which is why v12 does not have it.
+pub const IS_KING_MIRRORING_ENABLED: bool = cfg!(feature = "nnue-king-mirroring");
+
+/// Material output heads, selected by `output_bucket` from the piece count. Eight in the shared
+/// architecture, measured in zenith at **+14.7 Elo** at fixed depth; one in v12's shape. A
+/// compile-time constant because it sizes the payload and is stamped into the header, so a net and
+/// a build can never disagree about it silently.
+pub const NUM_OUTPUT_BUCKETS: usize = if cfg!(feature = "nnue-output-buckets-8") {
+    8
+} else {
+    1
+};
+
+/// XOR mask that mirrors a square across the d/e file boundary (it flips the three file bits).
+pub const FILE_FLIP: usize = 0x07;
+
+/// King-square weight banks, **derived** from `KING_BUCKET_MAP` rather than written down twice:
+/// the highest bank the map selects, plus one. Change the map and the count follows, so the two
+/// cannot disagree.
+pub const NUM_KING_BUCKETS: usize = max_king_bucket_index() + 1;
+
+pub const FEATURE_ROWS: usize = INPUT_SIZE * NUM_KING_BUCKETS; // Feature-transformer input rows (bucket-major).
+
+/// The highest weight-bank index `KING_BUCKET_MAP` selects, i.e. the bank count it needs, less one.
+const fn max_king_bucket_index() -> usize {
+    let mut highest = 0;
+    let mut square = 0;
+    while square < KING_BUCKET_MAP.len() {
+        if KING_BUCKET_MAP[square] > highest {
+            highest = KING_BUCKET_MAP[square];
+        }
+        square += 1;
+    }
+    highest as usize
+}
 
 // Quantisation constants. These MUST match the bullet trainer configuration that produced the net.
 pub const QA: i32 = 255; // Feature-transformer weight/activation scale (SCReLU clamp).
 pub const QB: i32 = 64; // Output-layer weight scale.
 pub const SCALE: i32 = 400; // Maps the raw network output to centipawns.
 
-/// Output-layer weight banks, selected by material count in the shared architecture. This
-/// engine's network has exactly one, so every position reads the same output head; material
-/// output buckets are a separate, strength-affecting change owed to all three ports at once.
-pub const NUM_OUTPUT_BUCKETS: usize = 1;
-
 /// Bit 0 of the net header's `flags` byte: a perspective whose king stands on files e-h has its
-/// squares horizontally mirrored before indexing. Off in this engine (see `NET_FLAGS`).
+/// squares horizontally mirrored before indexing (see `NET_FLAGS`).
 pub const NET_FLAG_HORIZONTAL_KING_MIRRORING: u8 = 1 << 0;
 
-/// The `flags` byte this engine is compiled for. Horizontal king mirroring is off: like the
-/// material output buckets it is a separate, strength-affecting change owed to all three ports at
-/// once, so a net that asks for it is refused rather than evaluated with the wrong indexing.
-pub const NET_FLAGS: u8 = 0;
+/// The `flags` byte this engine is compiled for, **derived from the shape**: bit 0 is set exactly
+/// when king mirroring is compiled in, so a mirrored net cannot load into an unmirrored build or
+/// the reverse — the two read entirely different feature rows for the same position.
+pub const NET_FLAGS: u8 = if IS_KING_MIRRORING_ENABLED {
+    NET_FLAG_HORIZONTAL_KING_MIRRORING
+} else {
+    0
+};
 
 /// The net header's `activation` value for SCReLU, the only activation this engine implements.
 pub const NET_ACTIVATION_SCRELU: u8 = 0;
 
+/// Element counts of the four payload tensors, in the trainer's save order. The payload sizes and
+/// the weight arrays are all derived from these, so the layout is written down once.
+pub const FEATURE_WEIGHT_COUNT: usize = FEATURE_ROWS * HIDDEN_SIZE;
+pub const FEATURE_BIAS_COUNT: usize = HIDDEN_SIZE;
+pub const OUTPUT_WEIGHT_COUNT: usize = NUM_OUTPUT_BUCKETS * 2 * HIDDEN_SIZE;
+pub const OUTPUT_BIAS_COUNT: usize = NUM_OUTPUT_BUCKETS;
+
 /// Total size of the quantised weight payload this engine expects: the feature weights, the
 /// feature bias and the output weights as little-endian int16, the output biases as little-endian
 /// int32, tightly packed in that order with no padding anywhere.
-pub const NET_PAYLOAD_BYTES: usize = FEATURE_ROWS * HIDDEN_SIZE * 2
-    + HIDDEN_SIZE * 2
-    + NUM_OUTPUT_BUCKETS * 2 * HIDDEN_SIZE * 2
-    + NUM_OUTPUT_BUCKETS * 4;
+pub const NET_PAYLOAD_BYTES: usize =
+    (FEATURE_WEIGHT_COUNT + FEATURE_BIAS_COUNT + OUTPUT_WEIGHT_COUNT) * 2 + OUTPUT_BIAS_COUNT * 4;
 
 /// Size of the same weights as the bullet trainer writes them, whose output biases are int16.
 /// Only `stamp_net` reads a trainer file; it widens each bias to the container's int32.
-pub const NET_TRAINER_PAYLOAD_BYTES: usize = FEATURE_ROWS * HIDDEN_SIZE * 2
-    + HIDDEN_SIZE * 2
-    + NUM_OUTPUT_BUCKETS * 2 * HIDDEN_SIZE * 2
-    + NUM_OUTPUT_BUCKETS * 2;
+pub const NET_TRAINER_PAYLOAD_BYTES: usize =
+    (FEATURE_WEIGHT_COUNT + FEATURE_BIAS_COUNT + OUTPUT_WEIGHT_COUNT) * 2 + OUTPUT_BIAS_COUNT * 2;
 
 /// Magic identifying a net in the shared Reckless NNUE container: "RNNUE1" and two zero bytes.
 pub const NET_MAGIC: [u8; 8] = *b"RNNUE1\0\0";
 
-/// Container format version. The map's *contents* are part of the architecture, so a change of
-/// what a king bucket means bumps this even when the bucket count is unchanged.
-pub const NET_FORMAT_VERSION: u16 = 1;
+/// Container format version, **2 when mirroring is on and 1 when it is off** — derived from the
+/// shape, never hardcoded, and derived from the same input in every port. That is not a quirk of
+/// the switch: the map's *contents* are part of the architecture, and turning mirroring on changes
+/// what a bucket *means* rather than only how many there are. v12's map pairs adjacent files
+/// (`half * 4 + file / 2`); the mirrored map is per-file (`half * 4 + min(file, 7 - file)`)
+/// because mirroring has already folded e-h onto d-a. By the container's own rule that is a format
+/// change, so it bumps the version — which `king_bucket_map_crc` would catch anyway, but the
+/// version says plainly that the two are different formats rather than two nets of one format.
+///
+/// Version 2 means mirroring on **and** eight output heads, together. A build that hardcoded 2
+/// while it had mirroring but not the heads would stamp a version-2 net another engine's version-2
+/// build read with a different number of heads; deriving the version from the mirroring switch —
+/// the thing that redefines a bucket — means the version cannot disagree with the shape.
+pub const NET_FORMAT_VERSION: u16 = if IS_KING_MIRRORING_ENABLED { 2 } else { 1 };
 
 /// On-disk header size, and the offset the payload starts at.
 pub const NET_HEADER_BYTES: usize = 64;
@@ -195,6 +253,73 @@ pub fn expected_net_header() -> NetHeader {
     }
 }
 
+/// A complete `RNNUE1` image — the 64-byte header this build stamps, then the payload — at **this
+/// build's shape**, with deterministic pseudo-random weights.
+///
+/// At the shared architecture (mirroring on, 8 output heads) no trained net exists yet: the shipped
+/// v12 net is a different shape and is rightly refused. This is what lets the new shape be tested
+/// and *measured* before a net exists for it.
+///
+/// Two uses, and both need the bytes to be identical everywhere:
+///
+/// - `tests/nnue_incremental_test.rs` checks the incremental accumulator against a from-scratch
+///   rebuild over it. Weight *quality* is irrelevant there — the property under test holds for any
+///   weights at all — and writing the payload out by hand is a second opinion on the layout
+///   `load_from_memory` reads.
+/// - `write_synthetic_net` writes it to a file, so `PAWNSTAR_EVALFILE=<it> pawnstar` can search a
+///   real net at a fixed depth. The node counts that come out are the new shape's **parity
+///   signature**, which is what the three bit-exact ports compare instead of a bench signature
+///   (`bench` cannot run at a shape whose net does not exist, and a depth-13 search over random
+///   weights barely prunes and does not terminate in useful time).
+///
+/// The weights come from a hand-seeded xorshift64* through fixed integer arithmetic, so the bytes
+/// are identical on every platform and in every port — the same net, byte for byte, as the C++
+/// engine's `--write-synthetic-net` writes.
+pub fn synthetic_net_image() -> Vec<u8> {
+    let mut image = Vec::with_capacity(NET_HEADER_BYTES + NET_PAYLOAD_BYTES);
+    image.resize(NET_HEADER_BYTES, 0);
+
+    // xorshift64*, seeded by hand: the same net on every machine and every run, so a failure is
+    // reproducible rather than something that happened once.
+    let mut state: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut next_value = move || {
+        state ^= state >> 12;
+        state ^= state << 25;
+        state ^= state >> 27;
+        state.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    };
+
+    // feature_weights, then feature_bias: small enough that an accumulator of up to 32 columns
+    // stays well inside int16, so the synthetic net exercises the same arithmetic a trained one
+    // does.
+    for _ in 0..FEATURE_WEIGHT_COUNT + FEATURE_BIAS_COUNT {
+        let value = (next_value() >> 56) as i32 - 128;
+        image.extend_from_slice(&(value as i16).to_le_bytes());
+    }
+    // output_weights: inside int8 range so load's requantisation is near-lossless, which keeps the
+    // incremental test about the accumulator and not about requantisation.
+    for _ in 0..OUTPUT_WEIGHT_COUNT {
+        let value = (next_value() >> 56) as i32 - 128 + 1;
+        image.extend_from_slice(&(value as i16).to_le_bytes());
+    }
+    // output_bias: int32 per output head, in QA*QB units.
+    for _ in 0..OUTPUT_BIAS_COUNT {
+        let bias = (next_value() >> 50) as i32 - 4096;
+        image.extend_from_slice(&bias.to_le_bytes());
+    }
+    assert_eq!(
+        image.len(),
+        NET_HEADER_BYTES + NET_PAYLOAD_BYTES,
+        "the synthetic payload is the size the container declares"
+    );
+
+    let mut header = expected_net_header();
+    header.payload_crc = crc64::checksum(&image[NET_HEADER_BYTES..]);
+    let header = header.with_header_crc();
+    image[..NET_HEADER_BYTES].copy_from_slice(&header.to_bytes());
+    image
+}
+
 /// What a load attempt did, so a caller can tell a net that was *refused* — one that failed a
 /// container check, and must never be played with — from a file that simply was not there.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -285,12 +410,13 @@ fn sub_column(acc: &mut [i16; HIDDEN_SIZE], column: &[i16; HIDDEN_SIZE]) {
 /// bit-identical to this scalar path. The eval scale folds 2^INT8_SHIFT back out.
 pub const INT8_SHIFT: i32 = 9;
 
-/// King-square -> weight-bank map (bullet `ChessBuckets`). Indexed by a square in the
-/// *perspective's own* orientation (white king square directly; black king square ^ RANK_FLIP),
-/// so the same 64-entry map serves both perspectives. MUST be byte-identical to the array passed
-/// to ChessBuckets::new in the bullet trainer.
+/// v12's king-square -> weight-bank map (bullet `ChessBuckets`): four file-*pairs* by board-half,
+/// the `0,0,1,1,2,2,3,3` pattern. Indexed by a square in the *perspective's own* orientation
+/// (white king square directly; black king square ^ RANK_FLIP), so the same 64-entry map serves
+/// both perspectives. MUST be byte-identical to the array passed to ChessBuckets::new in the
+/// bullet trainer. It is not mirror-symmetric, so it has no 32-entry form at all.
 #[rustfmt::skip]
-pub const KING_BUCKET_MAP: [i32; 64] = [
+pub const KING_BUCKET_MAP_UNMIRRORED: [i32; 64] = [
     0, 0, 1, 1, 2, 2, 3, 3,
     0, 0, 1, 1, 2, 2, 3, 3,
     0, 0, 1, 1, 2, 2, 3, 3,
@@ -301,40 +427,131 @@ pub const KING_BUCKET_MAP: [i32; 64] = [
     4, 4, 5, 5, 6, 6, 7, 7,
 ];
 
-/// Feature row for a piece in one perspective's bucket bank.
-///   white perspective: bucket*768 + color*384 + (type-1)*64 + square
-///   black perspective: bucket*768 + (1-color)*384 + (type-1)*64 + (square ^ RANK_FLIP)
+/// The mirrored shape's map over **half** a board: 32 entries indexed `rank * 4 + mirrored_file`,
+/// where `mirrored_file = min(file, 7 - file)`, giving `half * 4 + mirrored_file` with
+/// `half = rank / 4`.
+///
+/// **This is the one place the mirrored bucketing is written down**, and the engine's 64-entry map
+/// is generated from it by `expand_mirrored_king_bucket_map` using bullet's own expansion
+/// arithmetic. These are the same 32 numbers `ChessBucketsMirrored::new` is handed in the trainer
+/// (`tools/bullet/pawnstar.rs` in the C++ repository, which is where the trainer lives), so
+/// trainer and engine read one array rather than two 64-entry ones compared by eye — a map that
+/// drifts trains one network and runs another, and `king_bucket_map_crc` catches that only after
+/// the training run is already spent.
+#[rustfmt::skip]
+pub const KING_BUCKET_MAP_HALF: [i32; 32] = [
+    0, 1, 2, 3,
+    0, 1, 2, 3,
+    0, 1, 2, 3,
+    0, 1, 2, 3,
+    4, 5, 6, 7,
+    4, 5, 6, 7,
+    4, 5, 6, 7,
+    4, 5, 6, 7,
+];
+
+/// Expand the 32-entry half-board map to the 64-entry map the engine indexes, exactly as bullet's
+/// `ChessBucketsMirrored::new` does:
+/// `expanded[sq] = half[(sq / 8) * 4 + [0,1,2,3,3,2,1,0][sq % 8]]`, where that eight-entry table
+/// is `min(file, 7 - file)`. The expansion folds the file, so the expanded map gives the same bank
+/// for a square and its mirror — which is what makes it safe to index with the king's *unmirrored*
+/// square, as bullet does.
+pub const fn expand_mirrored_king_bucket_map() -> [i32; 64] {
+    let mut expanded = [0i32; 64];
+    let mut square = 0;
+    while square < expanded.len() {
+        let file = square % 8;
+        let mirrored_file = if file < 4 { file } else { 7 - file };
+        expanded[square] = KING_BUCKET_MAP_HALF[(square / 8) * 4 + mirrored_file];
+        square += 1;
+    }
+    expanded
+}
+
+/// The map this build indexes. Mirroring halves the king-placement space, so the two shapes need
+/// genuinely different maps: the mirrored one folds the file (four mirrored files x two halves),
+/// while v12's pairs adjacent files (four file-pairs x two halves). Which one is compiled is
+/// stamped into the header twice over — in `flags` and in `king_bucket_map_crc` — so a net trained
+/// for one can never load into a build of the other.
+pub const KING_BUCKET_MAP: [i32; 64] = if IS_KING_MIRRORING_ENABLED {
+    expand_mirrored_king_bucket_map()
+} else {
+    KING_BUCKET_MAP_UNMIRRORED
+};
+
+/// Everything one perspective needs to turn a (colour, piece, square) into a feature row: which
+/// weight bank it reads, and how a square and a colour are oriented into its own view.
+///
+/// **The whole point of gathering these three into one value is the refresh rule.** A perspective
+/// can only be updated incrementally while all three stay put; if any changes, every feature row
+/// it reads moves and the perspective must be rebuilt from scratch. Before mirroring there was one
+/// way for that to happen — a king crossing a bucket boundary — and the code compared bucket
+/// indices. Mirroring adds a second, and the two are not the same: on the mirrored map a king
+/// stepping d1 -> e1 keeps bucket 3 (file 3 and file 4 both mirror to file 3) while `square_flip`
+/// gains the file flip, so a comparison of buckets alone would diff a perspective whose every row
+/// had just moved and be **silently** wrong — no crash, no assertion, just a wrong evaluation.
+/// Comparing the whole `Perspective` cannot miss either case.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Perspective {
+    /// First feature row of this perspective's bank: `bucket * INPUT_SIZE`.
+    pub bank: usize,
+    /// XOR applied to a square: RANK_FLIP for black's view, plus FILE_FLIP if mirrored.
+    pub square_flip: usize,
+    /// XOR applied to a piece's colour: 0 for white's view, 1 for black's.
+    pub color_flip: usize,
+}
+
+/// One perspective's indexing state for `position`. The map is indexed by the king's square
+/// oriented to this perspective but **not** mirrored, matching bullet: the expanded map already
+/// folds the file, so a square and its mirror select the same bank.
 #[inline(always)]
-fn feature_row(bucket: i32, color: usize, piece: usize, sq: usize, black: bool) -> usize {
-    let type_offset = (piece - Piece::Pawn.index()) * 64;
-    let base = if black {
-        (1 - color) * 384 + type_offset + (sq ^ RANK_FLIP as usize)
+pub fn perspective_for(position: &Position, black: bool) -> Perspective {
+    let color = if black { Color::Black } else { Color::White };
+    let king = (position.pieces[Piece::King.index()] & position.colors[color.index()])
+        .lsb()
+        .index();
+    let oriented = if black {
+        king ^ RANK_FLIP as usize
     } else {
-        color * 384 + type_offset + sq
+        king
     };
-    bucket as usize * INPUT_SIZE + base
+    // bullet's test is `ksq % 8 > 3` on the perspective's own king square. A file is unchanged by
+    // the rank flip, so the raw square answers it for either perspective.
+    let mirror = if IS_KING_MIRRORING_ENABLED && (king & FILE_FLIP) >= 4 {
+        FILE_FLIP
+    } else {
+        0
+    };
+    Perspective {
+        bank: KING_BUCKET_MAP[oriented] as usize * INPUT_SIZE,
+        square_flip: (if black { RANK_FLIP as usize } else { 0 }) | mirror,
+        color_flip: usize::from(black),
+    }
 }
 
-/// Element offset into feature_weights of a piece's column in one perspective's bucket bank.
+/// Feature row for a piece in one perspective's bank:
+/// `bank + (colour ^ colour_flip)*384 + (type - 1)*64 + (square ^ square_flip)`.
 #[inline(always)]
-fn row(bucket: i32, color: usize, piece: usize, sq: usize, black: bool) -> usize {
-    feature_row(bucket, color, piece, sq, black) * HIDDEN_SIZE
+fn feature_row(perspective: &Perspective, color: usize, piece: usize, sq: usize) -> usize {
+    perspective.bank
+        + (color ^ perspective.color_flip) * 384
+        + (piece - Piece::Pawn.index()) * 64
+        + (sq ^ perspective.square_flip)
 }
 
-/// A perspective's king bucket: index the map with that perspective's king square, oriented to it.
+/// Element offset into feature_weights of a piece's column in one perspective's bank.
 #[inline(always)]
-pub fn white_bucket(p: &Position) -> i32 {
-    KING_BUCKET_MAP[(p.pieces[Piece::King.index()] & p.colors[Color::White.index()])
-        .lsb()
-        .index()]
+fn row(perspective: &Perspective, color: usize, piece: usize, sq: usize) -> usize {
+    feature_row(perspective, color, piece, sq) * HIDDEN_SIZE
 }
 
+/// The output head `position` selects, matching bullet's `MaterialCount<N>` exactly: the divisor
+/// is `ceil(32 / N)` and the bucket `(piece_count - 2) / divisor`, so at N = 8 it is
+/// `(piece_count - 2) / 4`. At N = 1 the divisor is 32 and every position selects head 0.
 #[inline(always)]
-pub fn black_bucket(p: &Position) -> i32 {
-    KING_BUCKET_MAP[(p.pieces[Piece::King.index()] & p.colors[Color::Black.index()])
-        .lsb()
-        .index()
-        ^ RANK_FLIP as usize]
+pub fn output_bucket(position: &Position) -> usize {
+    const DIVISOR: i32 = 32_usize.div_ceil(NUM_OUTPUT_BUCKETS) as i32;
+    ((position.occupied_squares().pop_count() - 2) / DIVISOR) as usize
 }
 
 /// Shared dequantisation tail: SCReLU leaves the dot in QA*QA*QB units; reduce one QA, add the
@@ -365,17 +582,18 @@ pub struct Network {
     /// index = feature * HIDDEN_SIZE + i. Feature rows are laid out bucket-major.
     feature_weights: Box<FeatureWeights>,
     feature_bias: [i16; HIDDEN_SIZE], // Feature-transformer biases (always int16).
-    /// Output weights: first HIDDEN_SIZE weight the side-to-move accumulator, next the other.
-    output_weights: [i16; 2 * HIDDEN_SIZE],
+    /// Output weights, head-major: each output head is a contiguous 2 * HIDDEN_SIZE run, the
+    /// side-to-move accumulator's half first, then the other.
+    output_weights: [i16; OUTPUT_WEIGHT_COUNT],
     /// Output weights requantised to int8 for the shipped int8 forward pass (Network::evaluate).
     /// w8 = round(output_weight / output_w_scale) clamped to [-127,127]; the scale keeps the
     /// largest output weight in int8 range (1 for nets whose |weight| <= 127, e.g. the shipped
     /// net). Populated by load so the int8 kernel needs no per-eval setup; the int16 reference
     /// (evaluate_exact) uses output_weights instead.
-    output_weights_i8: [i8; 2 * HIDDEN_SIZE],
+    output_weights_i8: [i8; OUTPUT_WEIGHT_COUNT],
     output_w_scale: i32, // Divisor mapping the int16 output weights into int8 range.
-    output_bias: i32,    // Output bias, in QA*QB units (the container's int32).
-    pub loaded: bool,    // Whether load() has succeeded.
+    output_bias: [i32; OUTPUT_BIAS_COUNT], // Output bias per head, in QA*QB units (the container's int32).
+    pub loaded: bool,                      // Whether load() has succeeded.
 }
 
 impl Default for Network {
@@ -409,10 +627,10 @@ impl Network {
         Network {
             feature_weights,
             feature_bias: [0; HIDDEN_SIZE],
-            output_weights: [0; 2 * HIDDEN_SIZE],
-            output_weights_i8: [0; 2 * HIDDEN_SIZE],
+            output_weights: [0; OUTPUT_WEIGHT_COUNT],
+            output_weights_i8: [0; OUTPUT_WEIGHT_COUNT],
             output_w_scale: 1,
-            output_bias: 0,
+            output_bias: [0; OUTPUT_BIAS_COUNT],
             loaded: false,
         }
     }
@@ -579,19 +797,21 @@ impl Network {
         let read_i32 = |bytes: &[u8], at: usize| {
             i32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
         };
-        for i in 0..FEATURE_ROWS * HIDDEN_SIZE {
+        for i in 0..FEATURE_WEIGHT_COUNT {
             self.feature_weights.0[i] = read_i16(payload, p + 2 * i);
         }
-        p += FEATURE_ROWS * HIDDEN_SIZE * 2;
-        for i in 0..HIDDEN_SIZE {
+        p += FEATURE_WEIGHT_COUNT * 2;
+        for i in 0..FEATURE_BIAS_COUNT {
             self.feature_bias[i] = read_i16(payload, p + 2 * i);
         }
-        p += HIDDEN_SIZE * 2;
-        for i in 0..2 * HIDDEN_SIZE {
+        p += FEATURE_BIAS_COUNT * 2;
+        for i in 0..OUTPUT_WEIGHT_COUNT {
             self.output_weights[i] = read_i16(payload, p + 2 * i);
         }
-        p += 2 * HIDDEN_SIZE * 2;
-        self.output_bias = read_i32(payload, p);
+        p += OUTPUT_WEIGHT_COUNT * 2;
+        for i in 0..OUTPUT_BIAS_COUNT {
+            self.output_bias[i] = read_i32(payload, p + 4 * i);
+        }
 
         // Requantise the output weights to int8 for the int8 forward pass. The scale keeps the
         // largest-magnitude output weight inside [-127, 127]; for nets whose weights already fit
@@ -601,7 +821,7 @@ impl Network {
             max_ow = max_ow.max((v as i32).abs());
         }
         self.output_w_scale = 1.max((max_ow + 126) / 127);
-        for i in 0..2 * HIDDEN_SIZE {
+        for i in 0..OUTPUT_WEIGHT_COUNT {
             // std::lround: round half away from zero.
             let q = lround(self.output_weights[i] as f64 / self.output_w_scale as f64);
             self.output_weights_i8[i] = q.clamp(-127, 127) as i8;
@@ -612,46 +832,44 @@ impl Network {
         NetLoadOutcome::Loaded
     }
 
-    /// Rebuild a single perspective from scratch (bias + every piece) using its king bucket.
+    /// Rebuild a single perspective from scratch (bias + every piece) through its indexing.
     fn refresh_side(
         &self,
         side: &mut [i16; HIDDEN_SIZE],
         position: &Position,
-        bucket: i32,
-        black: bool,
+        perspective: &Perspective,
     ) {
         *side = self.feature_bias;
         for color in [Color::White, Color::Black] {
             let friendly = position.colors[color.index()];
             for piece in Piece::ALL {
                 for s in position.pieces[piece.index()] & friendly {
-                    let r = row(bucket, color.index(), piece.index(), s.index(), black);
+                    let r = row(perspective, color.index(), piece.index(), s.index());
                     add_column(side, self.column(r));
                 }
             }
         }
     }
 
-    /// Apply the piece-placement delta from `from` to `to` to a single perspective, within one
-    /// (unchanged) king bucket.
+    /// Apply the piece-placement delta from `from` to `to` to a single perspective, whose indexing
+    /// is unchanged across the move.
     fn diff_side(
         &self,
         side: &mut [i16; HIDDEN_SIZE],
         from: &Position,
         to: &Position,
-        bucket: i32,
-        black: bool,
+        perspective: &Perspective,
     ) {
         for color in [Color::White, Color::Black] {
             for piece in Piece::ALL {
                 let from_bb = from.pieces[piece.index()] & from.colors[color.index()];
                 let to_bb = to.pieces[piece.index()] & to.colors[color.index()];
                 for s in from_bb & !to_bb {
-                    let r = row(bucket, color.index(), piece.index(), s.index(), black);
+                    let r = row(perspective, color.index(), piece.index(), s.index());
                     sub_column(side, self.column(r));
                 }
                 for s in to_bb & !from_bb {
-                    let r = row(bucket, color.index(), piece.index(), s.index(), black);
+                    let r = row(perspective, color.index(), piece.index(), s.index());
                     add_column(side, self.column(r));
                 }
             }
@@ -661,18 +879,8 @@ impl Network {
     /// Rebuild both perspectives of `acc` from scratch for `position` (seed bias + every piece).
     pub fn refresh(&self, acc: &mut Accumulator, position: &Position) {
         // Each perspective uses its own king's bucket bank; seed bias and add every piece.
-        self.refresh_side_white(acc, position);
-        self.refresh_side_black(acc, position);
-    }
-
-    #[inline]
-    fn refresh_side_white(&self, acc: &mut Accumulator, position: &Position) {
-        self.refresh_side(&mut acc.white, position, white_bucket(position), false);
-    }
-
-    #[inline]
-    fn refresh_side_black(&self, acc: &mut Accumulator, position: &Position) {
-        self.refresh_side(&mut acc.black, position, black_bucket(position), true);
+        self.refresh_side(&mut acc.white, position, &perspective_for(position, false));
+        self.refresh_side(&mut acc.black, position, &perspective_for(position, true));
     }
 
     /// Incrementally move `acc` from matching `from` to matching `to` by applying only the
@@ -680,13 +888,14 @@ impl Network {
     /// and a no-op when placements are identical (e.g. a null move). Robust to captures/castling/
     /// EP/promotion.
     pub fn update(&self, acc: &mut Accumulator, from: &Position, to: &Position) {
-        // A king move that crosses a bucket boundary changes that whole perspective's bank, so
-        // refresh it from scratch; otherwise apply only the piece-placement delta within the
-        // (unchanged) bank. At most one king moves per ply, so at most one perspective refreshes.
-        let wf = white_bucket(from);
-        let wt = white_bucket(to);
-        let bf = black_bucket(from);
-        let bt = black_bucket(to);
+        // A king move that changes its perspective's bank or its mirroring moves every feature row
+        // that perspective reads, so refresh it from scratch; otherwise apply only the
+        // piece-placement delta within the unchanged indexing. At most one king moves per ply, so
+        // at most one perspective refreshes.
+        let wf = perspective_for(from, false);
+        let wt = perspective_for(to, false);
+        let bf = perspective_for(from, true);
+        let bt = perspective_for(to, true);
 
         // Common case (~98%): neither king changed bucket. Find the changed squares directly from
         // the two colour bitboards (a move touches only 2-4 squares — quiet, capture, en passant,
@@ -703,43 +912,48 @@ impl Network {
                 let to_bb = to.colors[color.index()];
                 for s in from_bb & !to_bb {
                     let piece = from.squares[s.index()].index();
-                    let rw = row(wt, color.index(), piece, s.index(), false);
+                    let rw = row(&wt, color.index(), piece, s.index());
                     sub_column(&mut acc.white, self.column(rw));
-                    let rb = row(bt, color.index(), piece, s.index(), true);
+                    let rb = row(&bt, color.index(), piece, s.index());
                     sub_column(&mut acc.black, self.column(rb));
                 }
                 for s in to_bb & !from_bb {
                     let piece = to.squares[s.index()].index();
-                    let rw = row(wt, color.index(), piece, s.index(), false);
+                    let rw = row(&wt, color.index(), piece, s.index());
                     add_column(&mut acc.white, self.column(rw));
-                    let rb = row(bt, color.index(), piece, s.index(), true);
+                    let rb = row(&bt, color.index(), piece, s.index());
                     add_column(&mut acc.black, self.column(rb));
                 }
             }
             return;
         }
 
-        // Rare: one king crossed a bucket boundary. Refresh that perspective; diff the other.
+        // Rare: one king changed its perspective's bank or its mirroring. Refresh that
+        // perspective; diff the other. Both faults are caught by the one comparison — see
+        // `Perspective`.
         if wf != wt {
-            self.refresh_side(&mut acc.white, to, wt, false);
+            self.refresh_side(&mut acc.white, to, &wt);
         } else {
-            self.diff_side(&mut acc.white, from, to, wt, false);
+            self.diff_side(&mut acc.white, from, to, &wt);
         }
         if bf != bt {
-            self.refresh_side(&mut acc.black, to, bt, true);
+            self.refresh_side(&mut acc.black, to, &bt);
         } else {
-            self.diff_side(&mut acc.black, from, to, bt, true);
+            self.diff_side(&mut acc.black, from, to, &bt);
         }
     }
 
     /// Evaluate from a maintained accumulator using the **int8** output layer — the engine's
-    /// shipped evaluator, accurate to a bounded ~26 cp of evaluate_exact. `side_to_move` selects
-    /// which perspective feeds the first half of the output layer. Returns centipawns from the
+    /// shipped evaluator, accurate to a bounded ~26 cp of evaluate_exact. `position` is the one
+    /// `acc` was maintained for: it supplies the side to move, which selects which perspective
+    /// feeds the first half of the output layer, and the piece count, which selects the output
+    /// head — both are properties of the position, not of the accumulator, so passing the position
+    /// is what stops the two being read from different places. Returns centipawns from the
     /// side-to-move's perspective.
-    pub fn evaluate(&self, acc: &Accumulator, side_to_move: Color) -> i32 {
+    pub fn evaluate(&self, acc: &Accumulator, position: &Position) -> i32 {
         // Scalar int8 kernel, bit-identical to the C++ AVX2/VNNI paths: clamp [0,QA], square,
         // round, >>S to uint8; dot with int8 weights, accumulate exactly.
-        let white_to_move = side_to_move == Color::White;
+        let white_to_move = position.color_to_move == Color::White;
         let stm_acc = if white_to_move {
             &acc.white
         } else {
@@ -750,6 +964,10 @@ impl Network {
         } else {
             &acc.white
         };
+        // The output head the piece count selects. The weights are head-major, so a head is a
+        // contiguous 2 * HIDDEN_SIZE run and selecting one is an offset the kernel never sees.
+        let bucket = output_bucket(position);
+        let head = bucket * 2 * HIDDEN_SIZE;
 
         #[inline(always)]
         fn u8_act(x: i16) -> i32 {
@@ -771,31 +989,34 @@ impl Network {
         // Accumulate in i32: |dot8| <= 2 * HIDDEN_SIZE * 255 * 127 ≈ 66M << 2^31, so this is
         // bit-identical to the C++ scalar's int64 accumulation (and matches its AVX2 kernel,
         // which also accumulates in int32) while letting LLVM vectorize the loop.
-        let w_stm: &[i8; HIDDEN_SIZE] =
-            (&self.output_weights_i8[..HIDDEN_SIZE]).try_into().unwrap();
-        let w_ntm: &[i8; HIDDEN_SIZE] =
-            (&self.output_weights_i8[HIDDEN_SIZE..]).try_into().unwrap();
+        let w_stm: &[i8; HIDDEN_SIZE] = (&self.output_weights_i8[head..head + HIDDEN_SIZE])
+            .try_into()
+            .unwrap();
+        let w_ntm: &[i8; HIDDEN_SIZE] = (&self.output_weights_i8
+            [head + HIDDEN_SIZE..head + 2 * HIDDEN_SIZE])
+            .try_into()
+            .unwrap();
         let mut dot8: i32 = 0;
         for i in 0..HIDDEN_SIZE {
             dot8 += u8_act(stm_acc[i]) * w_stm[i] as i32;
             dot8 += u8_act(ntm_acc[i]) * w_ntm[i] as i32;
         }
         let output = dot8 as i64 * self.output_w_scale as i64 * (1i64 << INT8_SHIFT);
-        dequant(output, self.output_bias)
+        dequant(output, self.output_bias[bucket])
     }
 
     /// Evaluate a position with a full accumulator refresh, int8 output layer (the engine eval).
     pub fn evaluate_position(&self, position: &Position) -> i32 {
         let mut acc = Accumulator::default();
         self.refresh(&mut acc, position);
-        self.evaluate(&acc, position.color_to_move)
+        self.evaluate(&acc, position)
     }
 
     /// Exact int16 SCReLU forward pass — the **reference** evaluator that reproduces the
     /// trainer's eval (the NNUE test cross-checks it to bullet within ±2 cp) and that the int8
     /// evaluate approximates. Not used on the search hot path.
-    pub fn evaluate_exact(&self, acc: &Accumulator, side_to_move: Color) -> i32 {
-        let white_to_move = side_to_move == Color::White;
+    pub fn evaluate_exact(&self, acc: &Accumulator, position: &Position) -> i32 {
+        let white_to_move = position.color_to_move == Color::White;
         let stm_acc = if white_to_move {
             &acc.white
         } else {
@@ -806,20 +1027,23 @@ impl Network {
         } else {
             &acc.white
         };
+        let bucket = output_bucket(position);
+        let head = bucket * 2 * HIDDEN_SIZE;
 
         let mut output: i64 = 0;
         for i in 0..HIDDEN_SIZE {
-            output += (screlu(stm_acc[i]) * self.output_weights[i] as i32) as i64;
-            output += (screlu(ntm_acc[i]) * self.output_weights[HIDDEN_SIZE + i] as i32) as i64;
+            output += (screlu(stm_acc[i]) * self.output_weights[head + i] as i32) as i64;
+            output +=
+                (screlu(ntm_acc[i]) * self.output_weights[head + HIDDEN_SIZE + i] as i32) as i64;
         }
-        dequant(output, self.output_bias)
+        dequant(output, self.output_bias[bucket])
     }
 
     /// Exact int16 evaluation with a full accumulator refresh (reference / diagnostics).
     pub fn evaluate_exact_position(&self, position: &Position) -> i32 {
         let mut acc = Accumulator::default();
         self.refresh(&mut acc, position);
-        self.evaluate_exact(&acc, position.color_to_move)
+        self.evaluate_exact(&acc, position)
     }
 }
 
