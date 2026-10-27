@@ -32,7 +32,7 @@ fn nnue_suite() {
         return;
     }
     let mut net = Box::new(Network::new());
-    if !net.load(&net_file) {
+    if !net.load(&net_file).is_loaded() {
         common::check(false, &format!("NNUE: failed to load net '{}'", net_file));
         assert_eq!(common::summary("NNUE"), 0);
         return;

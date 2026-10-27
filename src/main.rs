@@ -8,6 +8,7 @@ use std::io::Write;
 use pawnstar::debug_hashtable::debug_x_clear;
 use pawnstar::game::Engine;
 use pawnstar::input_handling::process_input;
+use pawnstar::nnue::NetLoadOutcome;
 use pawnstar::version::version_string;
 
 /// The shipped NNUE net embedded into the binary (the C++ src/embedded_net.S), used as a fallback
@@ -90,23 +91,43 @@ fn main() {
         }
         // NNUE is the only evaluator, so a net is required. Load the shipped net from the working
         // directory (like the opening book); PAWNSTAR_EVALFILE=<path> overrides the path, and UCI
-        // `setoption name EvalFile value <path>` loads a different net at runtime. If the on-disk
-        // net cannot be loaded, fall back to the copy embedded in the binary so the engine always
-        // has a working evaluator. Only if even that fails — which would mean the build is
-        // corrupt — does the engine give up.
+        // `setoption name EvalFile value <path>` loads a different net at runtime.
+        //
+        // A net file that is simply *not there* falls back to the copy embedded in the binary, so
+        // the engine run from anywhere always has a working evaluator. A net that is there and is
+        // **refused** — one that failed a container check — does not: substituting another net for
+        // it would have the engine play a whole match with weights nobody asked for, and report a
+        // plausible Elo for a net that never played a move. The loader has already said which
+        // field disagreed; the engine stops.
         let net_path = std::env::var("PAWNSTAR_EVALFILE")
             .unwrap_or_else(|_| locate_resource("nnue/pawnstar-v12.bin"));
-        if !game.nnue_network.load(&net_path) {
-            println!(
-                "info string NNUE: file load failed; falling back to the embedded net ({} bytes)",
-                EMBEDDED_NET.len()
-            );
-            if !game.nnue_network.load_from_memory(EMBEDDED_NET, "embedded") {
+        match game.nnue_network.load(&net_path) {
+            NetLoadOutcome::Loaded => {}
+            NetLoadOutcome::Refused => {
                 println!(
-                    "info string FATAL: could not load the NNUE net from '{}' or the embedded fallback. The build may be corrupt.",
+                    "info string FATAL: the NNUE net '{}' was refused (the reason is above). The engine will not substitute its embedded net for a net that failed a check.",
                     net_path
                 );
+                let _ = std::io::stdout().flush();
                 std::process::exit(1);
+            }
+            NetLoadOutcome::FileUnavailable => {
+                println!(
+                    "info string NNUE: file load failed; falling back to the embedded net ({} bytes)",
+                    EMBEDDED_NET.len()
+                );
+                if !game
+                    .nnue_network
+                    .load_from_memory(EMBEDDED_NET, "embedded")
+                    .is_loaded()
+                {
+                    println!(
+                        "info string FATAL: could not load the NNUE net from '{}' or the embedded fallback. The build may be corrupt.",
+                        net_path
+                    );
+                    let _ = std::io::stdout().flush();
+                    std::process::exit(1);
+                }
             }
         }
     }

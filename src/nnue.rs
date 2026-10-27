@@ -17,6 +17,7 @@
 //! AVX2/VNNI kernels; x86 SIMD is a later parity-locked perf phase.
 
 use crate::constants::{Color, Piece, MAX_EVALUATION, RANK_FLIP};
+use crate::crc64;
 use crate::position::Position;
 
 pub const INPUT_SIZE: usize = 768; // Features per perspective per bucket: 2 colors * 6 types * 64 squares.
@@ -29,76 +30,202 @@ pub const QA: i32 = 255; // Feature-transformer weight/activation scale (SCReLU 
 pub const QB: i32 = 64; // Output-layer weight scale.
 pub const SCALE: i32 = 400; // Maps the raw network output to centipawns.
 
-/// Total size of the quantised weight payload: every weight a little-endian int16, tightly packed.
-pub const NET_FILE_BYTES: usize =
-    (FEATURE_ROWS * HIDDEN_SIZE + HIDDEN_SIZE + 2 * HIDDEN_SIZE + 1) * 2;
+/// Output-layer weight banks, selected by material count in the shared architecture. This
+/// engine's network has exactly one, so every position reads the same output head; material
+/// output buckets are a separate, strength-affecting change owed to all three ports at once.
+pub const NUM_OUTPUT_BUCKETS: usize = 1;
 
-/// Magic identifying a Pawnstar-stamped NNUE file ("PSN" + format version byte).
-pub const NET_MAGIC: [u8; 4] = *b"PSN1";
-pub const NET_FORMAT_VERSION: u16 = 1; // Header format version (bump on incompatible header changes).
+/// Bit 0 of the net header's `flags` byte: a perspective whose king stands on files e-h has its
+/// squares horizontally mirrored before indexing. Off in this engine (see `NET_FLAGS`).
+pub const NET_FLAG_HORIZONTAL_KING_MIRRORING: u8 = 1 << 0;
 
-/// Self-describing 32-byte header prepended to a shipped net so an incompatible file is rejected
-/// rather than silently misread. The architecture fields must equal the engine's compile-time
-/// constants; the loader checks every one. Raw (headerless) bullet output is rejected — stamp it
-/// with stamp_net.
+/// The `flags` byte this engine is compiled for. Horizontal king mirroring is off: like the
+/// material output buckets it is a separate, strength-affecting change owed to all three ports at
+/// once, so a net that asks for it is refused rather than evaluated with the wrong indexing.
+pub const NET_FLAGS: u8 = 0;
+
+/// The net header's `activation` value for SCReLU, the only activation this engine implements.
+pub const NET_ACTIVATION_SCRELU: u8 = 0;
+
+/// Total size of the quantised weight payload this engine expects: the feature weights, the
+/// feature bias and the output weights as little-endian int16, the output biases as little-endian
+/// int32, tightly packed in that order with no padding anywhere.
+pub const NET_PAYLOAD_BYTES: usize = FEATURE_ROWS * HIDDEN_SIZE * 2
+    + HIDDEN_SIZE * 2
+    + NUM_OUTPUT_BUCKETS * 2 * HIDDEN_SIZE * 2
+    + NUM_OUTPUT_BUCKETS * 4;
+
+/// Size of the same weights as the bullet trainer writes them, whose output biases are int16.
+/// Only `stamp_net` reads a trainer file; it widens each bias to the container's int32.
+pub const NET_TRAINER_PAYLOAD_BYTES: usize = FEATURE_ROWS * HIDDEN_SIZE * 2
+    + HIDDEN_SIZE * 2
+    + NUM_OUTPUT_BUCKETS * 2 * HIDDEN_SIZE * 2
+    + NUM_OUTPUT_BUCKETS * 2;
+
+/// Magic identifying a net in the shared Reckless NNUE container: "RNNUE1" and two zero bytes.
+pub const NET_MAGIC: [u8; 8] = *b"RNNUE1\0\0";
+
+/// Container format version. The map's *contents* are part of the architecture, so a change of
+/// what a king bucket means bumps this even when the bucket count is unchanged.
+pub const NET_FORMAT_VERSION: u16 = 1;
+
+/// On-disk header size, and the offset the payload starts at.
+pub const NET_HEADER_BYTES: usize = 64;
+
+/// Bytes of the header the `header_crc` field covers: everything before it.
+pub const NET_HEADER_CHECKSUMMED_BYTES: usize = 56;
+
+/// The self-describing 64-byte header of the shared `RNNUE1` container, little-endian throughout.
+/// Every architecture field must equal this engine's compile-time constants and
+/// `king_bucket_map_crc` the checksum of this engine's own `KING_BUCKET_MAP`, so a net of another
+/// shape — or of this shape with the buckets meaning something else — is refused rather than
+/// silently misread. Raw (headerless) trainer output is refused too: stamp it with `stamp_net`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct NetHeader {
-    pub magic: [u8; 4],      // NET_MAGIC.
-    pub format_version: u16, // NET_FORMAT_VERSION.
-    pub input_size: u16,     // INPUT_SIZE (features per perspective per bucket).
-    pub king_buckets: u16,   // NUM_KING_BUCKETS.
-    pub hidden_size: u16,    // HIDDEN_SIZE.
-    pub qa: i16,             // QA.
-    pub qb: i16,             // QB.
-    pub scale: i16,          // SCALE.
-                             // + 14 zero-padding bytes to a round 32 on disk.
+    pub magic: [u8; 8],           // NET_MAGIC, at offset 0.
+    pub format_version: u16,      // NET_FORMAT_VERSION, at 8.
+    pub header_bytes: u16,        // NET_HEADER_BYTES, at 10.
+    pub features_per_bucket: u16, // INPUT_SIZE, at 12.
+    pub king_buckets: u16,        // NUM_KING_BUCKETS, at 14.
+    pub hidden_size: u16,         // HIDDEN_SIZE, at 16.
+    pub output_buckets: u16,      // NUM_OUTPUT_BUCKETS, at 18.
+    pub flags: u8,                // NET_FLAGS, at 20.
+    pub activation: u8,           // NET_ACTIVATION_SCRELU, at 21.
+    pub qa: u16,                  // QA, at 22.
+    pub qb: u16,                  // QB, at 24.
+    pub eval_scale: u16,          // SCALE, at 26.
+    pub reserved: u32,            // Zero, at 28.
+    pub king_bucket_map_crc: u64, // CRC-64/XZ of the 64 map entries, one uint8 each, at 32.
+    pub payload_bytes: u64,       // NET_PAYLOAD_BYTES, at 40.
+    pub payload_crc: u64,         // CRC-64/XZ over the payload, at 48.
+    pub header_crc: u64,          // CRC-64/XZ over bytes 0..55, at 56.
 }
-
-/// On-disk header size.
-pub const NET_HEADER_BYTES: usize = 32;
 
 impl NetHeader {
-    /// Serialize to the packed little-endian 32-byte on-disk layout.
+    /// Serialize to the packed little-endian 64-byte on-disk layout, every field exactly as it
+    /// stands (`header_crc` included, so the layout round-trips; `with_header_crc` fills it).
     pub fn to_bytes(&self) -> [u8; NET_HEADER_BYTES] {
-        let mut b = [0u8; NET_HEADER_BYTES];
-        b[0..4].copy_from_slice(&self.magic);
-        b[4..6].copy_from_slice(&self.format_version.to_le_bytes());
-        b[6..8].copy_from_slice(&self.input_size.to_le_bytes());
-        b[8..10].copy_from_slice(&self.king_buckets.to_le_bytes());
-        b[10..12].copy_from_slice(&self.hidden_size.to_le_bytes());
-        b[12..14].copy_from_slice(&self.qa.to_le_bytes());
-        b[14..16].copy_from_slice(&self.qb.to_le_bytes());
-        b[16..18].copy_from_slice(&self.scale.to_le_bytes());
-        b
+        let mut bytes = [0u8; NET_HEADER_BYTES];
+        bytes[0..8].copy_from_slice(&self.magic);
+        bytes[8..10].copy_from_slice(&self.format_version.to_le_bytes());
+        bytes[10..12].copy_from_slice(&self.header_bytes.to_le_bytes());
+        bytes[12..14].copy_from_slice(&self.features_per_bucket.to_le_bytes());
+        bytes[14..16].copy_from_slice(&self.king_buckets.to_le_bytes());
+        bytes[16..18].copy_from_slice(&self.hidden_size.to_le_bytes());
+        bytes[18..20].copy_from_slice(&self.output_buckets.to_le_bytes());
+        bytes[20] = self.flags;
+        bytes[21] = self.activation;
+        bytes[22..24].copy_from_slice(&self.qa.to_le_bytes());
+        bytes[24..26].copy_from_slice(&self.qb.to_le_bytes());
+        bytes[26..28].copy_from_slice(&self.eval_scale.to_le_bytes());
+        bytes[28..32].copy_from_slice(&self.reserved.to_le_bytes());
+        bytes[32..40].copy_from_slice(&self.king_bucket_map_crc.to_le_bytes());
+        bytes[40..48].copy_from_slice(&self.payload_bytes.to_le_bytes());
+        bytes[48..56].copy_from_slice(&self.payload_crc.to_le_bytes());
+        bytes[56..64].copy_from_slice(&self.header_crc.to_le_bytes());
+        bytes
     }
 
-    /// Parse from the packed little-endian 32-byte on-disk layout.
-    pub fn from_bytes(b: &[u8]) -> NetHeader {
+    /// Parse from the packed little-endian 64-byte on-disk layout. `bytes` must be at least
+    /// `NET_HEADER_BYTES` long, which the loader checks before calling this.
+    pub fn from_bytes(bytes: &[u8]) -> NetHeader {
+        let word = |at: usize| u16::from_le_bytes([bytes[at], bytes[at + 1]]);
+        let long = |at: usize| u64::from_le_bytes(bytes[at..at + 8].try_into().unwrap());
         NetHeader {
-            magic: [b[0], b[1], b[2], b[3]],
-            format_version: u16::from_le_bytes([b[4], b[5]]),
-            input_size: u16::from_le_bytes([b[6], b[7]]),
-            king_buckets: u16::from_le_bytes([b[8], b[9]]),
-            hidden_size: u16::from_le_bytes([b[10], b[11]]),
-            qa: i16::from_le_bytes([b[12], b[13]]),
-            qb: i16::from_le_bytes([b[14], b[15]]),
-            scale: i16::from_le_bytes([b[16], b[17]]),
+            magic: bytes[0..8].try_into().unwrap(),
+            format_version: word(8),
+            header_bytes: word(10),
+            features_per_bucket: word(12),
+            king_buckets: word(14),
+            hidden_size: word(16),
+            output_buckets: word(18),
+            flags: bytes[20],
+            activation: bytes[21],
+            qa: word(22),
+            qb: word(24),
+            eval_scale: word(26),
+            reserved: u32::from_le_bytes(bytes[28..32].try_into().unwrap()),
+            king_bucket_map_crc: long(32),
+            payload_bytes: long(40),
+            payload_crc: long(48),
+            header_crc: long(56),
         }
+    }
+
+    /// This header with `header_crc` set to the checksum of its own first 56 bytes — what
+    /// `stamp_net` writes and what the loader recomputes to detect a corrupted header.
+    pub fn with_header_crc(&self) -> NetHeader {
+        let mut stamped = *self;
+        stamped.header_crc = crc64::checksum(&self.to_bytes()[..NET_HEADER_CHECKSUMMED_BYTES]);
+        stamped
     }
 }
 
-/// The header describing the architecture this engine was compiled for.
+/// CRC-64/XZ of this engine's king-bucket map, one `uint8` per square, which the header carries so
+/// that a net whose buckets *mean* something else is refused even though their count matches.
+pub fn king_bucket_map_crc() -> u64 {
+    let mut entries = [0u8; 64];
+    for (square, &bucket) in KING_BUCKET_MAP.iter().enumerate() {
+        entries[square] = bucket as u8;
+    }
+    crc64::checksum(&entries)
+}
+
+/// The header describing the architecture this engine was compiled for. `payload_crc` and
+/// `header_crc` are left zero: they belong to one particular file, not to the architecture.
 pub fn expected_net_header() -> NetHeader {
     NetHeader {
         magic: NET_MAGIC,
         format_version: NET_FORMAT_VERSION,
-        input_size: INPUT_SIZE as u16,
+        header_bytes: NET_HEADER_BYTES as u16,
+        features_per_bucket: INPUT_SIZE as u16,
         king_buckets: NUM_KING_BUCKETS as u16,
         hidden_size: HIDDEN_SIZE as u16,
-        qa: QA as i16,
-        qb: QB as i16,
-        scale: SCALE as i16,
+        output_buckets: NUM_OUTPUT_BUCKETS as u16,
+        flags: NET_FLAGS,
+        activation: NET_ACTIVATION_SCRELU,
+        qa: QA as u16,
+        qb: QB as u16,
+        eval_scale: SCALE as u16,
+        reserved: 0,
+        king_bucket_map_crc: king_bucket_map_crc(),
+        payload_bytes: NET_PAYLOAD_BYTES as u64,
+        payload_crc: 0,
+        header_crc: 0,
     }
+}
+
+/// What a load attempt did, so a caller can tell a net that was *refused* — one that failed a
+/// container check, and must never be played with — from a file that simply was not there.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum NetLoadOutcome {
+    /// The net passed both checks and is the network's weights now.
+    Loaded,
+    /// The file could not be opened or read. Nothing is known about its contents.
+    FileUnavailable,
+    /// The file failed one of the container's checks. The reason is on stderr, the previously
+    /// loaded network (if any) is untouched, and **no fallback net may be substituted**: a
+    /// refused net must not be quietly replaced by another, or a match reports a plausible Elo
+    /// for a net that never played a move.
+    Refused,
+}
+
+impl NetLoadOutcome {
+    /// Whether the net loaded.
+    pub fn is_loaded(self) -> bool {
+        self == NetLoadOutcome::Loaded
+    }
+}
+
+/// Report a refused net loudly on stderr, naming the field that disagreed and both values, and
+/// return the outcome that forbids any fallback. The values are pre-formatted so a count reads as
+/// a count and a checksum as hexadecimal.
+fn refuse_net(origin: &str, field: &str, file_value: &str, engine_value: &str) -> NetLoadOutcome {
+    eprintln!(
+        "info string NNUE: net '{}' refused: {} is {} in the file but {} in this engine",
+        origin, field, file_value, engine_value
+    );
+    NetLoadOutcome::Refused
 }
 
 /// The two perspective accumulators (each the feature-transformer output, width HIDDEN_SIZE).
@@ -217,7 +344,7 @@ pub fn black_bucket(p: &Position) -> i32 {
 /// could collide with the mate band. Clamping keeps |eval| below WIN_THRESHOLD so eval and mate
 /// scores never mix.
 #[inline]
-pub fn dequant(mut output: i64, bias: i16) -> i32 {
+pub fn dequant(mut output: i64, bias: i32) -> i32 {
     output /= QA as i64;
     output += bias as i64;
     output *= SCALE as i64;
@@ -247,7 +374,7 @@ pub struct Network {
     /// (evaluate_exact) uses output_weights instead.
     output_weights_i8: [i8; 2 * HIDDEN_SIZE],
     output_w_scale: i32, // Divisor mapping the int16 output weights into int8 range.
-    output_bias: i16,    // Output bias, in QA*QB units.
+    output_bias: i32,    // Output bias, in QA*QB units (the container's int32).
     pub loaded: bool,    // Whether load() has succeeded.
 }
 
@@ -290,102 +417,181 @@ impl Network {
         }
     }
 
-    /// Load quantised weights from a bullet native .bin file. On failure logs to stderr and stays
-    /// unloaded. Reads the file into memory and defers to load_from_memory.
-    pub fn load(&mut self, path: &str) -> bool {
-        self.loaded = false;
+    /// Load quantised weights from an `RNNUE1` net file. On any failure logs to stderr and leaves
+    /// the network exactly as it was. Reads the file into memory and defers to load_from_memory.
+    pub fn load(&mut self, path: &str) -> NetLoadOutcome {
         // Distinguish open failure from a mid-read I/O error, like the C++ (ifstream open vs read).
         let mut file = match std::fs::File::open(path) {
             Ok(f) => f,
             Err(_) => {
                 eprintln!("info string NNUE: cannot open net file '{}'", path);
-                return false;
+                return NetLoadOutcome::FileUnavailable;
             }
         };
         let mut buffer = Vec::new();
         use std::io::Read;
         if file.read_to_end(&mut buffer).is_err() {
             eprintln!("info string NNUE: error reading net file '{}'", path);
-            return false;
+            return NetLoadOutcome::FileUnavailable;
         }
         self.load_from_memory(&buffer, path)
     }
 
-    /// Load quantised weights from an in-memory image of a net file, using the same header
-    /// detection and architecture validation as load. Used for the engine's embedded fallback net.
-    pub fn load_from_memory(&mut self, data: &[u8], origin: &str) -> bool {
-        self.loaded = false;
-
-        // Only a Pawnstar-stamped image is accepted: a 32-byte NetHeader (magic + architecture)
-        // immediately followed by the payload. Every architecture field is checked against this
-        // engine's constants, so an incompatible — or an unstamped/raw bullet — net is rejected
-        // with a clear message instead of being silently misread.
-        if data.len() < NET_HEADER_BYTES || data[0..4] != NET_MAGIC {
+    /// Load quantised weights from an in-memory image of an `RNNUE1` net file, making the two
+    /// checks the container mandates, in order: the header (magic, its own checksum, every
+    /// architecture field against this engine's compile-time constants, and the king-bucket map's
+    /// checksum against this engine's own map), then the payload (its declared size against what
+    /// remains of the image, then its checksum). Also the loader for the engine's embedded net.
+    ///
+    /// Nothing is written into the network until every check has passed, so a refused net leaves a
+    /// previously loaded one untouched and playable rather than half-overwritten or unloaded.
+    pub fn load_from_memory(&mut self, data: &[u8], origin: &str) -> NetLoadOutcome {
+        // --- Check 1: the header. ---
+        if data.len() < NET_HEADER_BYTES || data[0..8] != NET_MAGIC {
             eprintln!(
-                "info string NNUE: net '{}' is not a stamped Pawnstar net (missing '{}' header) — stamp it with stamp_net",
-                origin,
-                std::str::from_utf8(&NET_MAGIC).unwrap()
+                "info string NNUE: net '{}' refused: it is not an RNNUE1 net (the first {} bytes are not the magic 'RNNUE1\\0\\0') — stamp a trainer net with stamp_net",
+                origin, NET_MAGIC.len()
             );
-            return false;
+            return NetLoadOutcome::Refused;
         }
         let header = NetHeader::from_bytes(data);
 
-        // Validate the stamped architecture fields against this build.
-        let expected = expected_net_header();
-        if header.format_version != expected.format_version
-            || header.input_size != expected.input_size
-            || header.king_buckets != expected.king_buckets
-            || header.hidden_size != expected.hidden_size
-            || header.qa != expected.qa
-            || header.qb != expected.qb
-            || header.scale != expected.scale
-        {
-            eprintln!(
-                "info string NNUE: net '{}' is incompatible — file is v{}/in{}/buckets{}/hidden{}/qa{}/qb{}/scale{}, \
-                 engine expects v{}/in{}/buckets{}/hidden{}/qa{}/qb{}/scale{}",
+        let header_crc = crc64::checksum(&data[..NET_HEADER_CHECKSUMMED_BYTES]);
+        if header.header_crc != header_crc {
+            return refuse_net(
                 origin,
-                header.format_version,
-                header.input_size,
-                header.king_buckets,
-                header.hidden_size,
-                header.qa,
-                header.qb,
-                header.scale,
-                expected.format_version,
-                expected.input_size,
-                expected.king_buckets,
-                expected.hidden_size,
-                expected.qa,
-                expected.qb,
-                expected.scale
+                "header_crc",
+                &format!("{:#018x}", header.header_crc),
+                &format!("{:#018x}", header_crc),
             );
-            return false;
-        }
-        let payload_offset = NET_HEADER_BYTES;
-
-        // The packed payload (feature_weights, feature_bias, output_weights, output_bias) is
-        // exactly NET_FILE_BYTES; the image may have a header before it and bullet padding after.
-        if data.len() < payload_offset + NET_FILE_BYTES {
-            eprintln!("info string NNUE: net '{}' truncated", origin);
-            return false;
         }
 
-        // Copy in bullet's save order: feature_weights, feature_bias, output_weights, output_bias.
-        let mut p = payload_offset;
+        // Every architecture field against this engine's own compile-time constants.
+        let expected = expected_net_header();
+        let fields: [(&str, u64, u64); 11] = [
+            (
+                "format_version",
+                header.format_version as u64,
+                expected.format_version as u64,
+            ),
+            (
+                "header_bytes",
+                header.header_bytes as u64,
+                expected.header_bytes as u64,
+            ),
+            (
+                "features_per_bucket",
+                header.features_per_bucket as u64,
+                expected.features_per_bucket as u64,
+            ),
+            (
+                "king_buckets",
+                header.king_buckets as u64,
+                expected.king_buckets as u64,
+            ),
+            (
+                "hidden_size",
+                header.hidden_size as u64,
+                expected.hidden_size as u64,
+            ),
+            (
+                "output_buckets",
+                header.output_buckets as u64,
+                expected.output_buckets as u64,
+            ),
+            ("flags", header.flags as u64, expected.flags as u64),
+            (
+                "activation",
+                header.activation as u64,
+                expected.activation as u64,
+            ),
+            ("qa", header.qa as u64, expected.qa as u64),
+            ("qb", header.qb as u64, expected.qb as u64),
+            (
+                "eval_scale",
+                header.eval_scale as u64,
+                expected.eval_scale as u64,
+            ),
+        ];
+        for (field, file_value, engine_value) in fields {
+            if file_value != engine_value {
+                return refuse_net(
+                    origin,
+                    field,
+                    &file_value.to_string(),
+                    &engine_value.to_string(),
+                );
+            }
+        }
+        if header.reserved != expected.reserved {
+            return refuse_net(
+                origin,
+                "reserved",
+                &header.reserved.to_string(),
+                &expected.reserved.to_string(),
+            );
+        }
+
+        // The map's contents are part of the architecture: the same number of king buckets
+        // meaning different squares would load cleanly and read the wrong weight bank.
+        if header.king_bucket_map_crc != expected.king_bucket_map_crc {
+            return refuse_net(
+                origin,
+                "king_bucket_map_crc",
+                &format!("{:#018x}", header.king_bucket_map_crc),
+                &format!("{:#018x}", expected.king_bucket_map_crc),
+            );
+        }
+
+        // --- Check 2: the payload. ---
+        if header.payload_bytes != expected.payload_bytes {
+            return refuse_net(
+                origin,
+                "payload_bytes",
+                &header.payload_bytes.to_string(),
+                &expected.payload_bytes.to_string(),
+            );
+        }
+        let remaining_bytes = (data.len() - NET_HEADER_BYTES) as u64;
+        if remaining_bytes != header.payload_bytes {
+            return refuse_net(
+                origin,
+                "payload length after the header",
+                &remaining_bytes.to_string(),
+                &header.payload_bytes.to_string(),
+            );
+        }
+        let payload = &data[NET_HEADER_BYTES..];
+        let payload_crc = crc64::checksum(payload);
+        if header.payload_crc != payload_crc {
+            return refuse_net(
+                origin,
+                "payload_crc",
+                &format!("{:#018x}", header.payload_crc),
+                &format!("{:#018x}", payload_crc),
+            );
+        }
+
+        // Both checks passed: copy in the trainer's save order — feature_weights, feature_bias,
+        // output_weights (own perspective's half first), output_bias.
+        let mut p = 0;
         let read_i16 = |bytes: &[u8], at: usize| i16::from_le_bytes([bytes[at], bytes[at + 1]]);
+        let read_i32 = |bytes: &[u8], at: usize| {
+            i32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
+        };
         for i in 0..FEATURE_ROWS * HIDDEN_SIZE {
-            self.feature_weights.0[i] = read_i16(data, p + 2 * i);
+            self.feature_weights.0[i] = read_i16(payload, p + 2 * i);
         }
         p += FEATURE_ROWS * HIDDEN_SIZE * 2;
         for i in 0..HIDDEN_SIZE {
-            self.feature_bias[i] = read_i16(data, p + 2 * i);
+            self.feature_bias[i] = read_i16(payload, p + 2 * i);
         }
         p += HIDDEN_SIZE * 2;
         for i in 0..2 * HIDDEN_SIZE {
-            self.output_weights[i] = read_i16(data, p + 2 * i);
+            self.output_weights[i] = read_i16(payload, p + 2 * i);
         }
         p += 2 * HIDDEN_SIZE * 2;
-        self.output_bias = read_i16(data, p);
+        self.output_bias = read_i32(payload, p);
 
         // Requantise the output weights to int8 for the int8 forward pass. The scale keeps the
         // largest-magnitude output weight inside [-127, 127]; for nets whose weights already fit
@@ -403,7 +609,7 @@ impl Network {
 
         self.loaded = true;
         eprintln!("info string NNUE: loaded net '{}'", origin);
-        true
+        NetLoadOutcome::Loaded
     }
 
     /// Rebuild a single perspective from scratch (bias + every piece) using its king bucket.

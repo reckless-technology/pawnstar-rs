@@ -35,7 +35,7 @@ an overflow panic in a dev build means a porting bug. The `release` profile matc
 counters (DEBUGX) are compiled in by default; `--no-default-features` leaves them out (the C++ `RELEASE=1`).
 
 ```bash
-cargo run --release --bin stamp_net -- <raw.bin> <stamped.bin>   # stamp a raw bullet net with the PSN1 header
+cargo run --release --bin stamp_net -- <in.bin> <stamped.bin>    # stamp a trainer net into the RNNUE1 container
 cargo run --release --bin dump_magics                            # regenerate the magic multipliers
 cargo run --release --example nnue_dump < fens.txt               # raw evals for FENs (cross-engine eval parity)
 cargo doc --open                                                 # API documentation (the C++ `make doc`)
@@ -495,10 +495,28 @@ The result is bit-identical to the C++ scalar, AVX2 and AVX-VNNI kernels, and wi
 the exact int16 forward pass, `evaluate_exact`. The exact pass is kept as the reference that `nnue_test` holds to the
 trainer's evals.
 
-**The net file** begins with a 32-byte `PSN1` header recording the architecture: the input size, bucket count, width,
-QA, QB and SCALE. The loader rejects a headerless or mismatched file rather than misreading it, and `stamp_net` adds
-the header to a raw bullet net. The shipped net, v12, was trained on about 6 billion public positions; its lineage
-and the experiments behind it are in the C++ repository.
+**The net file** is in the shared Reckless NNUE container, `RNNUE1`: the 64-byte self-describing header every
+reckless-technology chess engine reads, then the weight payload. The header records the architecture - the features
+per bucket, the king bucket count, the hidden size, the output bucket count, the architecture flags, the activation,
+QA, QB and the eval scale - plus a CRC-64/XZ of the king-bucket map's 64 entries, the exact payload size, a CRC-64/XZ
+over the payload and one over the header's own first 56 bytes.
+
+The loader makes the container's two checks, in order: the header (the magic, its own checksum, every architecture
+field against this engine's compile-time constants, then the map's checksum against the checksum of this engine's own
+`KING_BUCKET_MAP`), then the payload (its declared size against what remains of the file, then its checksum). A net
+that fails any of them is **refused**: the engine names the field and both values on stderr and does not load it.
+Nothing is written into the network until every check has passed, so a refused net leaves the net already playing
+untouched rather than half-overwritten or unloaded. And a refused net is never papered over with the embedded one -
+an engine that substituted a net would play a whole match on weights nobody asked for, and the match would report a
+plausible Elo for a net that never played a move. Only a net file that is *missing* falls back to the embedded copy.
+
+The map's contents are part of the architecture, which is what the map checksum closes: the same eight king buckets
+meaning other squares would load cleanly and read the wrong weight bank. `stamp_net` writes the header from its own
+build's constants, so a net stamped by a tool built at another architecture carries that architecture's header and is
+then refused - the header, never the file name, says what a net is.
+
+The shipped net, v12, was trained on about 6 billion public positions; its lineage and the experiments behind it are
+in the C++ repository.
 
 ### Opening book
 
@@ -536,7 +554,7 @@ and runs searches on a worker thread so `stop` and `ponderhit` are heard during 
 | `Threads` | spin 1–256 | cores | Lazy SMP thread count. |
 | `Move Overhead` | spin 0–5000 | 30 | Milliseconds held back from every hard deadline for GUI and network lag. |
 | `OwnBook` | check | true | Consult the opening book. |
-| `EvalFile` | string | empty: the shipped net | Load another PSN1 net; clears the eval cache. |
+| `EvalFile` | string | empty: the shipped net | Load another `RNNUE1` net; clears the eval cache. A refused net is not loaded and the net already playing stays in use. |
 | `Clear Hash` | button | | Empty the transposition table. |
 | `Ponder` | check | false | Advertised for GUIs; pondering itself follows `go ponder`. |
 

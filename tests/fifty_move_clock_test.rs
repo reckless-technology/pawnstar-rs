@@ -49,7 +49,10 @@ fn game_after(fen: &str, moves: &[&str]) -> Box<Game> {
     game.thread_count = 1;
     game.use_own_book = false;
     if std::path::Path::new(NET).exists() {
-        check(game.nnue_network.load(NET), "the shipped net loads");
+        check(
+            game.nnue_network.load(NET).is_loaded(),
+            "the shipped net loads",
+        );
     }
     game.set_position(fen);
     for uci in moves {
