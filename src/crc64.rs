@@ -74,3 +74,31 @@ pub fn checksum_of_parts(parts: &[&[u8]]) -> u64 {
     }
     finish(register)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::hint::black_box;
+
+    /// `TABLE` is built by `build_table` at compile time, so the generator's own body never runs in
+    /// the shipped engine. Run it here — through a function pointer, so it is not folded back into
+    /// a constant — and hold the table it produces to the one the engine was compiled with. The
+    /// same guard `generated_data` keeps over its `const` table generators, and for the same
+    /// reason: a generator nothing executes is a generator nothing checks.
+    #[test]
+    fn const_table_equals_its_generator_run_at_run_time() {
+        let generator: fn() -> [u64; 256] = build_table;
+        let built_at_run_time = black_box(generator)();
+        assert_eq!(
+            built_at_run_time, TABLE,
+            "the table built at run time differs from the one built at compile time"
+        );
+        assert_eq!(TABLE[0], 0, "the zero byte contributes nothing");
+        // The top bit alone shifts down to 1 in seven steps, and the eighth step exclusive-ors in
+        // the polynomial over a zero register - so this one entry is the polynomial itself.
+        assert_eq!(
+            TABLE[0x80], REFLECTED_POLYNOMIAL,
+            "the table is built from the reflected CRC-64/XZ polynomial"
+        );
+    }
+}
