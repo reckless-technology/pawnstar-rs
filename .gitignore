@@ -1,3 +1,6 @@
 /target
 # A build at another NNUE shape wants a target directory of its own (nnue/README.md).
 /target-*
+
+# The synthetic net a new-shape parity run writes (tools/new-shape-signature.sh).
+synthetic-net.bin
