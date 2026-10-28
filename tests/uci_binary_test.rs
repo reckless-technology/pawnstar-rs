@@ -234,6 +234,20 @@ fn test_start_in_repo() {
         err.contains("loaded net 'nnue/pawnstar-v12.bin'"),
         "the net from the working directory",
     );
+    // The loaded net is announced as a refusal is: an `info string` on stdout, where a GUI reads it, and the
+    // bare line on stderr, which a harness keeps. Once it was stderr alone, with the prefix on it.
+    check(
+        has_line(&out, "info string NNUE: loaded net 'nnue/pawnstar-v12.bin'"),
+        "stdout says, as an info string, which net loaded",
+    );
+    check(
+        has_line(&err, "NNUE: loaded net 'nnue/pawnstar-v12.bin'"),
+        "stderr carries the loaded net too, with no protocol prefix",
+    );
+    check(
+        !err.contains("info string"),
+        "no info string on stderr, a protocol line on the wrong stream",
+    );
     check(
         has_line(&out, "uciok") && has_line(&out, "readyok"),
         "the handshake",
@@ -296,6 +310,10 @@ fn test_evalfile_override() {
     check(
         err.contains(&format!("loaded net '{net}'")),
         "the override's net loads",
+    );
+    check(
+        has_line(&out, &format!("info string NNUE: loaded net '{net}'")),
+        "the override's net is announced on stdout as an info string",
     );
     check(
         !out.contains("embedded net"),
