@@ -857,7 +857,10 @@ impl Network {
 
         self.loaded = true;
         self.loaded_net_origin = origin.to_string();
-        eprintln!("info string NNUE: loaded net '{}'", origin);
+        // On both streams, as a refusal is: `info string` on stdout is the protocol message a UCI GUI
+        // reads, and the bare line on stderr is what a match harness keeps. It used to be printed on
+        // stderr alone, with the `info string` prefix on it, so no GUI ever saw which net was playing.
+        print_net_message_on_both_streams(&format!("NNUE: loaded net '{}'", origin));
         NetLoadOutcome::Loaded
     }
 

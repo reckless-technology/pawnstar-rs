@@ -528,7 +528,9 @@ says so on both streams too, **naming the net still playing**: `NNUE: keeping th
 harness that set `EvalFile`, saw `readyok` and ran a thousand games would otherwise credit the result to a net that
 never played a move. And a refused net is never papered over with the embedded one - an engine that substituted a net
 would play a whole match on weights nobody asked for, and the match would report a plausible Elo for a net that never
-played a move. Only a net file that is *missing* falls back to the embedded copy.
+played a move. Only a net file that is *missing* falls back to the embedded copy. A net that loads says so the same
+way (`info string NNUE: loaded net '<origin>'` on stdout, the bare `NNUE: loaded net '<origin>'` on stderr), so the
+GUI and the harness are told which net is playing as surely as they are told which was refused.
 
 The map's contents are part of the architecture, which is what the map checksum closes: the same eight king buckets
 meaning other squares would load cleanly and read the wrong weight bank. `stamp_net` writes the header from its own
