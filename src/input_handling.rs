@@ -12,6 +12,7 @@ use crate::chess_clock::ClockType;
 use crate::constants::{Color, HASHTABLE_MEGABYTES, MAX_SEARCH_THREADS};
 use crate::debug_hashtable::{debug_x_clear, debug_x_write};
 use crate::game::Engine;
+use crate::nnue::{print_net_message_on_both_streams, NetLoadOutcome};
 use crate::search_state::{evaluate_position, SearchState};
 use crate::uci_println;
 use crate::version::version_string;
@@ -164,13 +165,28 @@ fn handle_setoption(engine: &mut Engine, args: &[String]) {
         // loaded before this command stays loaded. (Without that, a mismatched EvalFile left the
         // network unloaded, the engine still answered `readyok`, and the first `go` had no
         // evaluator.) Only a net that actually loaded invalidates the cached evaluations.
-        if game.nnue_network.load(&value).is_loaded() {
+        //
+        // Keeping the old net is right; being quiet about it was the defect. **Which** net is now
+        // playing goes out on both streams, naming it: a harness that set EvalFile, saw `readyok`
+        // and ran a thousand games otherwise attributes the result to a net that never played a
+        // move, and `info` lines are exactly what a harness drops.
+        let outcome = game.nnue_network.load(&value);
+        if outcome.is_loaded() {
             game.eval_cache.clear(); // cached evals belong to the previous net
         } else if game.nnue_network.loaded {
-            uci_println!(
-                "info string NNUE: '{}' was not loaded; the net already loaded stays in use",
-                value
-            );
+            // A file that could not be read at all is not a refusal — nothing is known about its
+            // contents — so it is turned down in its own words, with the same kept-net sentence.
+            let what_happened = if outcome == NetLoadOutcome::Refused {
+                "was refused"
+            } else {
+                "could not be read"
+            };
+            print_net_message_on_both_streams(&format!(
+                "NNUE: keeping the net already loaded ('{}'); '{}' {} and is not in play",
+                game.nnue_network.loaded_net_origin(),
+                value,
+                what_happened
+            ));
         }
     } else if name == "Hash" {
         // A malformed value (parse_integer) leaves each numeric option as it is.

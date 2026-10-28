@@ -296,10 +296,16 @@ fn test_setoption() {
         "OwnBook is true only for 'true'",
     );
 
+    // With nothing loaded yet, a net that cannot be read loads nothing — and nothing is invented
+    // in its place, so the engine names no net as playing, because none is.
     run(&mut engine, "setoption name EvalFile value no/such/net.bin");
     check(
         !engine.game().nnue_network.loaded,
-        "EvalFile with a missing file leaves no net",
+        "EvalFile with a missing file leaves no net, and substitutes none",
+    );
+    check(
+        engine.game().nnue_network.loaded_net_origin().is_empty(),
+        "and no net is named as playing while none is loaded",
     );
     if net_present() {
         run(&mut engine, &format!("setoption name EvalFile value {NET}"));
@@ -307,10 +313,23 @@ fn test_setoption() {
             engine.game().nnue_network.loaded,
             "EvalFile loads the shipped net",
         );
+        check(
+            engine.game().nnue_network.loaded_net_origin() == NET,
+            "and the net now playing is remembered by name",
+        );
 
-        // A refused net neither replaces the net already playing nor leaves the engine with none:
-        // a mismatched EvalFile once left the network unloaded while the engine still answered
-        // `readyok`, and the first `go` then had no evaluator at all.
+        // A net the engine turns down neither replaces the net already playing nor leaves the
+        // engine with none: a mismatched EvalFile once left the network unloaded while the engine
+        // still answered `readyok`, and the first `go` then had no evaluator at all. The net that
+        // is playing must still be named and must still evaluate — a harness that saw only
+        // `readyok` would otherwise credit a thousand games to a net that never played a move.
+        // Both ways a load can fail are walked: a net read and refused, and a file that cannot be
+        // read at all.
+        let start_position = pawnstar::position::Position::from_string(START_FEN);
+        let evaluation_before = engine
+            .game()
+            .nnue_network
+            .evaluate_position(&start_position);
         let mut image = std::fs::read(NET).expect("the shipped net");
         let at = image.len() / 2;
         image[at] ^= 0x01;
@@ -319,14 +338,28 @@ fn test_setoption() {
             std::process::id()
         ));
         std::fs::write(&corrupt, &image).expect("write the corrupt net");
-        run(
-            &mut engine,
-            &format!("setoption name EvalFile value {}", corrupt.display()),
-        );
-        check(
-            engine.game().nnue_network.loaded,
-            "a refused EvalFile keeps the net already loaded",
-        );
+        for (what, path) in [
+            ("a refused EvalFile", corrupt.display().to_string()),
+            ("an unreadable EvalFile", "no/such/net.bin".to_string()),
+        ] {
+            run(
+                &mut engine,
+                &format!("setoption name EvalFile value {path}"),
+            );
+            let network = &engine.game().nnue_network;
+            check(
+                network.loaded,
+                &format!("{what} keeps the net already loaded"),
+            );
+            check(
+                network.loaded_net_origin() == NET,
+                &format!("{what} leaves the shipped net named as the one playing"),
+            );
+            check(
+                network.evaluate_position(&start_position) == evaluation_before,
+                &format!("{what} leaves that net evaluating exactly as it did"),
+            );
+        }
         let _ = std::fs::remove_file(&corrupt);
     }
 

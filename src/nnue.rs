@@ -26,6 +26,7 @@
 use crate::constants::{Color, Piece, MAX_EVALUATION, RANK_FLIP};
 use crate::crc64;
 use crate::position::Position;
+use crate::uci_println;
 
 pub const INPUT_SIZE: usize = 768; // Features per perspective per bucket: 2 colors * 6 types * 64 squares.
 pub const HIDDEN_SIZE: usize = 1024; // Feature-transformer / accumulator width per perspective.
@@ -328,10 +329,11 @@ pub enum NetLoadOutcome {
     Loaded,
     /// The file could not be opened or read. Nothing is known about its contents.
     FileUnavailable,
-    /// The file failed one of the container's checks. The reason is on stderr, the previously
-    /// loaded network (if any) is untouched, and **no fallback net may be substituted**: a
-    /// refused net must not be quietly replaced by another, or a match reports a plausible Elo
-    /// for a net that never played a move.
+    /// The file failed one of the container's checks. The reason is on **both** stdout (as an
+    /// `info string`, for a GUI) and stderr (bare, for a match harness, which drops info lines),
+    /// the previously loaded network (if any) is untouched, and **no fallback net may be
+    /// substituted**: a refused net must not be quietly replaced by another, or a match reports a
+    /// plausible Elo for a net that never played a move.
     Refused,
 }
 
@@ -342,14 +344,25 @@ impl NetLoadOutcome {
     }
 }
 
-/// Report a refused net loudly on stderr, naming the field that disagreed and both values, and
-/// return the outcome that forbids any fallback. The values are pre-formatted so a count reads as
-/// a count and a checksum as hexadecimal.
+/// Print one line about a net on **both** streams, on purpose: `info string <message>` on stdout,
+/// which is what a UCI GUI reads, and the bare line on stderr, which is what a match harness keeps
+/// — harnesses routinely drop `info` lines. A refusal only a GUI can see is a refusal nobody reads
+/// when it matters, which is during an unattended match: a harness that sets `EvalFile`, sees
+/// `readyok` and runs a thousand games then reports a plausible Elo for a net that never played a
+/// move. The C++ engine's `RefuseNet` writes to the two streams the same way.
+pub fn print_net_message_on_both_streams(message: &str) {
+    uci_println!("info string {}", message);
+    eprintln!("{}", message);
+}
+
+/// Report a refused net loudly on both streams, naming the field that disagreed and both values,
+/// and return the outcome that forbids any fallback. The values are pre-formatted so a count reads
+/// as a count and a checksum as hexadecimal.
 fn refuse_net(origin: &str, field: &str, file_value: &str, engine_value: &str) -> NetLoadOutcome {
-    eprintln!(
-        "info string NNUE: net '{}' refused: {} is {} in the file but {} in this engine",
+    print_net_message_on_both_streams(&format!(
+        "NNUE: net '{}' refused: {} is {} in the file but {} in this engine",
         origin, field, file_value, engine_value
-    );
+    ));
     NetLoadOutcome::Refused
 }
 
@@ -594,6 +607,12 @@ pub struct Network {
     output_w_scale: i32, // Divisor mapping the int16 output weights into int8 range.
     output_bias: [i32; OUTPUT_BIAS_COUNT], // Output bias per head, in QA*QB units (the container's int32).
     pub loaded: bool,                      // Whether load() has succeeded.
+    /// Where the net now loaded came from: the path it was read from, or `embedded` for the copy
+    /// built into the binary. Empty while nothing has loaded. Remembered so a *refused* net can be
+    /// turned down by name while naming the net that is still playing — "keeping the net already
+    /// loaded ('x'); 'y' was refused" tells a match harness which weights its games were played
+    /// on, which "the net already loaded stays in use" did not.
+    loaded_net_origin: String,
 }
 
 impl Default for Network {
@@ -632,11 +651,20 @@ impl Network {
             output_w_scale: 1,
             output_bias: [0; OUTPUT_BIAS_COUNT],
             loaded: false,
+            loaded_net_origin: String::new(),
         }
     }
 
-    /// Load quantised weights from an `RNNUE1` net file. On any failure logs to stderr and leaves
-    /// the network exactly as it was. Reads the file into memory and defers to load_from_memory.
+    /// Where the net now loaded came from — the path it was read from, or `embedded` — or an empty
+    /// string while nothing has loaded. A refused load leaves it naming the net still playing.
+    pub fn loaded_net_origin(&self) -> &str {
+        &self.loaded_net_origin
+    }
+
+    /// Load quantised weights from an `RNNUE1` net file. A refusal is reported on both stdout and
+    /// stderr (see `print_net_message_on_both_streams`) and leaves the network exactly as it was,
+    /// `loaded_net_origin` still naming the net that is playing. Reads the file into memory and
+    /// defers to load_from_memory.
     pub fn load(&mut self, path: &str) -> NetLoadOutcome {
         // Distinguish open failure from a mid-read I/O error, like the C++ (ifstream open vs read).
         let mut file = match std::fs::File::open(path) {
@@ -666,10 +694,10 @@ impl Network {
     pub fn load_from_memory(&mut self, data: &[u8], origin: &str) -> NetLoadOutcome {
         // --- Check 1: the header. ---
         if data.len() < NET_HEADER_BYTES || data[0..8] != NET_MAGIC {
-            eprintln!(
-                "info string NNUE: net '{}' refused: it is not an RNNUE1 net (the first {} bytes are not the magic 'RNNUE1\\0\\0') — stamp a trainer net with stamp_net",
+            print_net_message_on_both_streams(&format!(
+                "NNUE: net '{}' refused: it is not an RNNUE1 net (the first {} bytes are not the magic 'RNNUE1\\0\\0') — stamp a trainer net with stamp_net",
                 origin, NET_MAGIC.len()
-            );
+            ));
             return NetLoadOutcome::Refused;
         }
         let header = NetHeader::from_bytes(data);
@@ -828,6 +856,7 @@ impl Network {
         }
 
         self.loaded = true;
+        self.loaded_net_origin = origin.to_string();
         eprintln!("info string NNUE: loaded net '{}'", origin);
         NetLoadOutcome::Loaded
     }
