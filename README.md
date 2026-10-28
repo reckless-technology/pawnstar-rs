@@ -518,11 +518,17 @@ over the payload and one over the header's own first 56 bytes.
 The loader makes the container's two checks, in order: the header (the magic, its own checksum, every architecture
 field against this engine's compile-time constants, then the map's checksum against the checksum of this engine's own
 `KING_BUCKET_MAP`), then the payload (its declared size against what remains of the file, then its checksum). A net
-that fails any of them is **refused**: the engine names the field and both values on stderr and does not load it.
-Nothing is written into the network until every check has passed, so a refused net leaves the net already playing
-untouched rather than half-overwritten or unloaded. And a refused net is never papered over with the embedded one -
-an engine that substituted a net would play a whole match on weights nobody asked for, and the match would report a
-plausible Elo for a net that never played a move. Only a net file that is *missing* falls back to the embedded copy.
+that fails any of them is **refused**, loudly and on **both** streams: the engine names the field and both values as
+an `info string` on stdout, which a GUI reads, and as the bare line on stderr, which a match harness keeps - a
+harness routinely drops `info` lines, and a refusal only a GUI can see is a refusal nobody reads during an
+unattended match. Nothing is written into the network until every check has passed, so a refused net leaves the net
+already playing untouched rather than half-overwritten or unloaded. A `setoption name EvalFile` that is turned down
+says so on both streams too, **naming the net still playing**: `NNUE: keeping the net already loaded ('<origin>');
+'<path>' was refused and is not in play`. Keeping the old net is right; being quiet about it was the defect - a
+harness that set `EvalFile`, saw `readyok` and ran a thousand games would otherwise credit the result to a net that
+never played a move. And a refused net is never papered over with the embedded one - an engine that substituted a net
+would play a whole match on weights nobody asked for, and the match would report a plausible Elo for a net that never
+played a move. Only a net file that is *missing* falls back to the embedded copy.
 
 The map's contents are part of the architecture, which is what the map checksum closes: the same eight king buckets
 meaning other squares would load cleanly and read the wrong weight bank. `stamp_net` writes the header from its own

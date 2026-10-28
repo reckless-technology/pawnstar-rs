@@ -1,17 +1,26 @@
 //! The engine binary's start-up: the banner, where it finds the opening book and the net, the
 //! embedded fallbacks when it finds neither, `PAWNSTAR_EVALFILE`, and the end of input.
 //!
-//! Each case runs the built `pawnstar` with its whole input written up front and stdin then
+//! Most cases run the built `pawnstar` with their whole input written up front and stdin then
 //! closed, so the engine reads to the end of input and returns from `main` (rather than `quit`'s
-//! process exit), and asserts on what it printed.
+//! process exit), and assert on what it printed.
+//!
+//! The one case that must watch a *search* survive something — a refused `setoption name EvalFile`
+//! leaving the net already loaded playing — drives the engine interactively instead
+//! (`DrivenEngine`), reading each answer before sending the next command: input written up front
+//! ends while the search runs, and a search cut short proves nothing about the net behind it.
 
 mod common;
 
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::mpsc::{self, Receiver};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use pawnstar::constants::HASHTABLE_MEGABYTES;
+use pawnstar::nnue::{NetHeader, HIDDEN_SIZE, NET_HEADER_BYTES};
 
 const MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
 const ENGINE: &str = env!("CARGO_BIN_EXE_pawnstar");
@@ -58,6 +67,133 @@ fn run_engine_allowing_failure(
         String::from_utf8_lossy(&output.stdout).into_owned(),
         String::from_utf8_lossy(&output.stderr).into_owned(),
     )
+}
+
+/// An engine driven the way a GUI or a match harness drives it: each command goes out only once
+/// the engine's answer to the one before has been read, so a search is never cut short by the end
+/// of input (`quit` straight after `go` aborts the search, and the `bestmove` that follows has no
+/// search behind it). stdout arrives line by line over a channel; stderr is drained by a thread of
+/// its own, because a child that fills a pipe nobody reads stops dead, and `finish` hands back the
+/// whole of it — stderr is the stream a match harness keeps.
+struct DrivenEngine {
+    child: Child,
+    stdin: ChildStdin,
+    stdout_lines: Receiver<String>,
+    stderr_reader: JoinHandle<String>,
+    stdout_transcript: String,
+}
+
+impl DrivenEngine {
+    /// Start the engine in `cwd` with `envs`, its three streams piped.
+    fn start(engine: &Path, cwd: &Path, envs: &[(&str, &str)]) -> DrivenEngine {
+        let mut command = Command::new(engine);
+        command
+            .current_dir(cwd)
+            .env_remove("PAWNSTAR_EVALFILE")
+            .env_remove("PAWNSTAR_BENCH_DEBUG")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        for (key, value) in envs {
+            command.env(key, value);
+        }
+        let mut child = command.spawn().expect("failed to spawn engine");
+        let stdin = child.stdin.take().expect("engine stdin");
+        let stdout = child.stdout.take().expect("engine stdout");
+        let stderr = child.stderr.take().expect("engine stderr");
+        let (sender, stdout_lines) = mpsc::channel();
+        thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                if sender.send(line).is_err() {
+                    break; // the test has finished with this engine
+                }
+            }
+        });
+        let stderr_reader = thread::spawn(move || {
+            let mut text = String::new();
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                text.push_str(&line);
+                text.push('\n');
+            }
+            text
+        });
+        DrivenEngine {
+            child,
+            stdin,
+            stdout_lines,
+            stderr_reader,
+            stdout_transcript: String::new(),
+        }
+    }
+
+    /// Send one UCI command (and flush, so the engine sees it at once).
+    fn send(&mut self, command: &str) {
+        writeln!(self.stdin, "{command}").expect("engine stdin");
+        self.stdin.flush().expect("engine stdin");
+    }
+
+    /// Read stdout until a line starts with `prefix`, and return everything read, that line
+    /// included. On a timeout (or an engine that ended first) it returns what did arrive, so the
+    /// caller's own check reports the absence rather than the test panicking inside a helper.
+    fn read_until(&mut self, prefix: &str, timeout: Duration) -> String {
+        let mut read = String::new();
+        while let Ok(line) = self.stdout_lines.recv_timeout(timeout) {
+            let is_the_marker = line.starts_with(prefix);
+            for text in [&mut self.stdout_transcript, &mut read] {
+                text.push_str(&line);
+                text.push('\n');
+            }
+            if is_the_marker {
+                break;
+            }
+        }
+        read
+    }
+
+    /// `quit`, then the engine's exit status, its whole stdout and its whole stderr.
+    fn finish(mut self) -> (bool, String, String) {
+        self.send("quit");
+        let status = self.child.wait().expect("engine exit");
+        while let Ok(line) = self.stdout_lines.recv_timeout(Duration::from_secs(5)) {
+            self.stdout_transcript.push_str(&line);
+            self.stdout_transcript.push('\n');
+        }
+        let stderr = self.stderr_reader.join().expect("the stderr reader");
+        (status.success(), self.stdout_transcript, stderr)
+    }
+}
+
+/// `ucinewgame` (so the transposition table and the eval cache start empty and two searches of the
+/// same position are comparable node for node) then a fixed-depth search from the start position.
+/// Returns the best move and the node count of the last iteration that reported one.
+fn search_the_start_position(engine: &mut DrivenEngine, depth: u32) -> (String, String) {
+    engine.send("ucinewgame");
+    engine.send("isready");
+    engine.read_until("readyok", Duration::from_secs(30));
+    engine.send("position startpos");
+    engine.send(&format!("go depth {depth}"));
+    let search = engine.read_until("bestmove ", Duration::from_secs(120));
+    let best_move = search
+        .lines()
+        .find(|l| l.starts_with("bestmove "))
+        .unwrap_or_default()
+        .to_string();
+    // `info depth N ... nodes <count> ...`: the count from the deepest iteration reported.
+    let nodes = search
+        .lines()
+        .filter(|l| l.starts_with("info depth"))
+        .filter_map(|l| {
+            let mut fields = l.split_whitespace();
+            while let Some(field) = fields.next() {
+                if field == "nodes" {
+                    return fields.next().map(str::to_string);
+                }
+            }
+            None
+        })
+        .next_back()
+        .unwrap_or_default();
+    (best_move, nodes)
 }
 
 /// A fresh, empty scratch directory of this process's own.
@@ -309,6 +445,134 @@ fn test_refused_net_does_not_fall_back() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `setoption name EvalFile` naming an incompatible net, mid-session: the refusal must be **loud
+/// on both streams** and must say which net is playing instead.
+///
+/// Keeping the net already loaded is right — the alternative is an engine with no evaluator, or
+/// one playing weights nobody asked for. Being quiet about it was the defect: the refusal went to
+/// stderr alone, the kept-net line to stdout alone as an `info string`, and it named no net at
+/// all. A match harness keeps stderr and routinely drops `info` lines, so it set `EvalFile`, saw
+/// `readyok`, and ran a thousand games whose result it then attributed to a net that never played
+/// a move.
+fn test_refused_evalfile_is_loud_and_names_the_kept_net() {
+    // An incompatible net built from the shipped one: `hidden_size` one higher than this build's,
+    // with `header_crc` re-stamped over it, so it is refused on an architecture field rather than
+    // on a checksum — the same shape of mistake as pointing the engine at another engine's net.
+    let shipped = Path::new(MANIFEST_DIR)
+        .join("nnue")
+        .join("pawnstar-v12.bin");
+    let Ok(image) = std::fs::read(&shipped) else {
+        check(
+            true,
+            "the shipped net is absent; the refused-EvalFile case is skipped",
+        );
+        return;
+    };
+    let file_hidden_size = HIDDEN_SIZE as u16 + 1;
+    let mut header = NetHeader::from_bytes(&image);
+    header.hidden_size = file_hidden_size;
+    let mut incompatible = header.with_header_crc().to_bytes().to_vec();
+    incompatible.extend_from_slice(&image[NET_HEADER_BYTES..]);
+    let dir = scratch("incompatible-evalfile");
+    let incompatible_path = dir.join("incompatible-net.bin");
+    std::fs::write(&incompatible_path, &incompatible).expect("write the incompatible net");
+    let incompatible_path = incompatible_path.to_string_lossy().into_owned();
+
+    // Started from the repository root, so the net now playing is the shipped one, by that name.
+    const KEPT_NET: &str = "nnue/pawnstar-v12.bin";
+    let mut engine = DrivenEngine::start(
+        Path::new(ENGINE),
+        Path::new(MANIFEST_DIR),
+        &[("PAWNSTAR_THREADS", "1")],
+    );
+    check(
+        has_line(
+            &engine.read_until("ready", Duration::from_secs(60)),
+            "ready",
+        ),
+        "the engine is up on the net it found in the working directory",
+    );
+    engine.send("uci");
+    check(
+        has_line(
+            &engine.read_until("uciok", Duration::from_secs(30)),
+            "uciok",
+        ),
+        "the handshake before the refusal",
+    );
+    // Without this, `go` answers from the opening book instantly and no search runs at all.
+    engine.send("setoption name OwnBook value false");
+
+    // A real search on the net loaded at start-up, to compare the one after the refusal against.
+    let (best_move_before, nodes_before) = search_the_start_position(&mut engine, 12);
+    check(
+        best_move_before.starts_with("bestmove ") && !nodes_before.is_empty(),
+        "the search before the refused EvalFile is a real one (bestmove and a node count)",
+    );
+
+    engine.send(&format!(
+        "setoption name EvalFile value {incompatible_path}"
+    ));
+    engine.send("isready");
+    let answer = engine.read_until("readyok", Duration::from_secs(30));
+    let refusal = format!(
+        "NNUE: net '{incompatible_path}' refused: hidden_size is {file_hidden_size} in the file but {HIDDEN_SIZE} in this engine"
+    );
+    let kept = format!(
+        "NNUE: keeping the net already loaded ('{KEPT_NET}'); '{incompatible_path}' was refused and is not in play"
+    );
+    check(
+        answer
+            .lines()
+            .any(|l| l == format!("info string {refusal}")),
+        "stdout carries the refusal as an info string, naming the field and both values",
+    );
+    check(
+        answer.lines().any(|l| l == format!("info string {kept}")),
+        "stdout says which net is still playing",
+    );
+    check(
+        has_line(&answer, "readyok"),
+        "the engine is ready again after turning the net down",
+    );
+
+    // The engine still searches, and searches with the net it kept: from a cleared table, at the
+    // same depth, the same position gives the same best move and the same node count. A node count
+    // that moved would mean the refused net had reached the evaluation after all.
+    let (best_move_after, nodes_after) = search_the_start_position(&mut engine, 12);
+    check(
+        best_move_after == best_move_before && !best_move_after.is_empty(),
+        &format!(
+            "the search after the refusal returns the same best move ({best_move_before} / {best_move_after})"
+        ),
+    );
+    check(
+        nodes_after == nodes_before && !nodes_after.is_empty(),
+        &format!(
+            "the search after the refusal is the same search ({nodes_before} nodes / {nodes_after} nodes)"
+        ),
+    );
+
+    let (exited_cleanly, out, err) = engine.finish();
+    check(
+        exited_cleanly,
+        "the engine quits cleanly: a refused EvalFile mid-session is not fatal",
+    );
+    check(
+        err.lines().any(|l| l == refusal),
+        "stderr carries the same refusal, without the info string prefix",
+    );
+    check(
+        err.lines().any(|l| l == kept),
+        "stderr says which net is still playing, without the info string prefix",
+    );
+    check(
+        !out.contains("embedded") && !err.contains("embedded"),
+        "nothing falls back to the embedded net",
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn uci_binary_suite() {
     // The engine binary plays on the net it embeds — the shipped v12 asset — and a build at another
@@ -322,12 +586,15 @@ fn uci_binary_suite() {
     test_start_in_repo();
     test_evalfile_override();
     test_refused_net_does_not_fall_back();
+    test_refused_evalfile_is_loud_and_names_the_kept_net();
     test_embedded_fallbacks();
     test_resources_beside_the_executable();
     test_broken_book_falls_back();
     test_quit();
     assert_eq!(
-        common::summary("UCI binary: banner, resource lookup, embedded fallbacks, quit"),
+        common::summary(
+            "UCI binary: banner, resource lookup, embedded fallbacks, a refused EvalFile, quit"
+        ),
         0,
         "uci binary suite reported failures"
     );

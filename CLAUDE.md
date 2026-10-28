@@ -139,10 +139,12 @@ opening book, chess clock, the uci_test.sh shell suite, plus Rust-only gates: ta
 (`generated_data_test.rs`, and a unit test running the `const` table generators at run time), the bench golden,
 every UCI command in process (`uci_commands_test.rs`), the fifty-move clock (`fifty_move_clock_test.rs`: castling
 advances it, as FIDE 9.3 and FEN have it, and a mate on the hundredth ply is mate, not the draw, as FIDE 5.1.1 has it -
-`search` tests for the mate before it draws, at the point the C++ and Go do), the binary's start-up and fallbacks (`uci_binary_test.rs`),
+`search` tests for the mate before it draws, at the point the C++ and Go do), the binary's start-up, fallbacks and the
+refused `setoption name EvalFile` that keeps the net already loaded and names it on both streams (`uci_binary_test.rs`),
 the shared NNUE container (`nnue_container_test.rs`: CRC-64/XZ against its published check value **first**, the
-`RNNUE1` header's layout offset by offset, and every refusal the loader's two checks make - each leaving the net
-already loaded playing, and a refused net never replaced by the embedded one)
+`RNNUE1` header's layout offset by offset, and every refusal the loader's two checks make - each announced on
+stdout and stderr both, each leaving the net already loaded playing, and a refused net never replaced by the embedded
+one)
 and the library helpers the search does not call (`library_api_test.rs`). NNUE-dependent suites skip (pass) when
 `nnue/pawnstar-v12.bin` is absent, preserving the C++ exit-0 contract. Shipping a new net follows
 the C++ checklist (../pawnstar/nnue/README.md §7) plus re-blessing the golden test here.

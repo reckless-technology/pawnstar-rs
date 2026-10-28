@@ -6,7 +6,8 @@
 //! engine computing the same checksum from the same bytes as the other four.
 //!
 //! The refusals are then walked field by field. Each must be loud (naming the field and both
-//! values, which the loader prints to stderr), must leave a previously loaded net playing, and
+//! values, which the loader prints on both stdout and stderr), must leave a previously loaded net
+//! playing, and
 //! must never be papered over with another net: a net that fails a check never plays a move, so
 //! an engine that quietly substituted one would report a plausible Elo for a net that never ran.
 
