@@ -70,41 +70,44 @@ pass. Narrowing the comparison back to the bank alone makes that suite fail on t
 first line, naming `white(bank=2304 flip=7)` — same bank, different flip — while the half-boundary
 lines still pass, which is how the test was checked.
 
-### The new shape's node-count signature
+### The new shape's cross-port node-count signature
 
 At the new shape the engine refuses the shipped net, so `bench` cannot run, and over random weights a
 depth-13 search barely prunes and does not finish in any useful time. The parity signature is instead
-a fixed-depth search over the **synthetic net**, whose bytes are identical on every platform and in
+six fixed-depth searches over the **synthetic net**, whose bytes are identical on every platform and in
 every port (SHA-256 `4abfdb7bf3f6753fb53d8fed3b524750f7c06031cd5464445f18075f8ad4871b`, 12,617,824
-bytes — the same file the C++ engine's `test_nnue_incremental --write-synthetic-net` writes):
+bytes — the same file the C++ engine's `test_nnue_incremental --write-synthetic-net` writes).
+
+[`tools/new-shape-signature.sh`](../tools/new-shape-signature.sh) is that gate, and it is **committed
+byte-identical in `pawnstar`, `pawnstar-rs` and `pawnstar-go`**: the six expected results live in it and
+nowhere else, so `diff` between the three repositories is the whole audit and there is no second copy of
+the numbers to drift — this file used to hold one, and a second copy of this repository's *bench* golden
+once sat in CI and silently went stale for three commits. The `new-shape` CI job runs it on every pull
+request.
 
 ```bash
-CARGO_TARGET_DIR=target-newshape cargo run --release --features nnue-shared-shape \
-    --bin write_synthetic_net -- synthetic.bin
-PAWNSTAR_EVALFILE=synthetic.bin PAWNSTAR_THREADS=1 target-newshape/release/pawnstar
+CARGO_TARGET_DIR=target-newshape cargo build --release --bins --features nnue-shared-shape
+target-newshape/release/write_synthetic_net synthetic-net.bin
+tools/new-shape-signature.sh --hash 64 --net synthetic-net.bin target-newshape/release/pawnstar
 ```
 
-Then, per position: `setoption name OwnBook value false`, `position …`, `go depth 8`. Depth 8,
-single-threaded, book off:
+It asserts the net's size, SHA-256 and RNNUE1 header — including `format_version` 2, `payload_bytes`
+12,617,760 and `king_bucket_map_crc` `0x0A20060D4E9586E0` — **before** searching it, so a drifted
+generator fails as a drifted generator instead of reading as a search regression. `--hash` is mandatory
+and deliberately not defaulted, and its value is printed beside every node count: table size changes the
+collision pattern and so the node count at a fixed depth, which is how `pawnstar-go`'s 512 MB default
+stayed invisible for five months against this port's 64 MB. The numbers were reproduced by all three
+ports at `Hash 64` — C++ (clang 22 on Windows, clang 18 on `reckless-ci-lin-2`), Rust and Go.
 
-| nodes | best move | position |
-|---|---|---|
-| 2,709 | g1f3 | `rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1` |
-| 1,100,203 | f3d3 | `r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1` |
-| 117,442 | b4f4 | `8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1` |
-| 183,574 | a1b1 | `r3k2r/pb3p2/5npp/n2p4/1p1PPB2/6P1/P2N1PBP/R3K2R w KQkq - 0 1` |
-| 125,721 | e2e4 | `3k4/pppppppp/8/8/8/8/PPPPPPPP/3K4 w - - 0 1` |
-| 134,448 | e2e3 | `4k3/pppppppp/8/8/8/8/PPPPPPPP/4K3 w - - 0 1` |
+The last two of the six positions put the kings on d1/d8 and e1/e8, either side of the mirror boundary,
+so the search spends its time in positions whose perspectives keep crossing it — the case that is silent
+when the refresh rule is wrong.
 
-The last two put the kings on d1/d8 and e1/e8, either side of the mirror boundary, so the search
-spends its time in positions whose perspectives keep crossing it — the case that is silent when the
-refresh rule is wrong. Reproduced identically by the C++ engine (clang 22, Windows; clang 18 on
-`reckless-ci-lin-2`) and by this one.
-
-Two traps when reading those numbers out of the engine: `quit` straight after `go` cancels the search
-but still prints a `bestmove`, so wait for the `bestmove` before sending `quit`; and **two line types
-begin `info depth N`** — only the completed iteration carries `nodes`, so a `currmove` report reads as
-a missing node count on a search that actually finished.
+Two traps the script handles, and that anybody reading these numbers out of the engine by hand must
+handle too: `quit` straight after `go` cancels the search but still prints a `bestmove`, so wait for the
+`bestmove` before sending `quit`; and **two line types begin `info depth N`** — only the completed
+iteration carries `nodes`, so a `currmove` report reads as a missing node count on a search that
+actually finished.
 
 **This file is a shared asset, not a Rust artifact.** Everything about producing a net — the
 bullet trainer setup, data pipeline, quantisation, verification, SPRT testing, and the full

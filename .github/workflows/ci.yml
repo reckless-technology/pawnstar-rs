@@ -79,6 +79,72 @@ jobs:
           components: rustfmt
       - run: cargo fmt --check
 
+  # ---------------------------------------------------------------------------------------------------
+  # The SHARED NNUE SHAPE — horizontal king mirroring plus 8 material output heads — which every job
+  # above leaves entirely untested, because the shape is behind Cargo features that default off and they
+  # all exercise the default. That path is about to carry a freshly trained net the whole project
+  # depends on, and a gated path with no CI rots silently: pawnstar-go's transposition table defaulted
+  # to 512 MB against this port's 64 MB from May until 2026-10-27, through every release, because the
+  # only cross-port gate that ran was `bench` and `bench` pins the table to 64 MB in all three. A gate
+  # that controls for a difference cannot detect it.
+  #
+  # Its own job rather than a feature matrix on build-test, for three reasons. The default shape's bench
+  # golden, its coverage percentage and its node counts must not move, and a matrix would recompute all
+  # of them; the two shapes' failures stay distinguishable at a glance, where a matrix leg reads as "the
+  # build broke"; and the job runs concurrently with the others, so it adds a name to the list rather
+  # than minutes to the critical path. Linux only: the shape is integer arithmetic chosen at compile
+  # time, and the synthetic net is proven byte-identical across platforms (the script asserts its
+  # SHA-256 every run), so a Windows leg would double the cost for no new failure mode.
+  # ---------------------------------------------------------------------------------------------------
+  new-shape:
+    name: new NNUE shape (mirroring + 8 output heads)
+    runs-on: ubuntu-24.04
+    env:
+      # A target directory of its own, as nnue/README.md says: not only to keep the two feature sets'
+      # artifacts apart, but because MSVC's linker has been seen to fail with LNK1201 on a PDB the other
+      # feature set wrote. /target-* is gitignored, so the same command works in a developer's checkout.
+      CARGO_TARGET_DIR: target-newshape
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the tags and the history: build.rs derives the version from them
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build (release, nnue-shared-shape)
+        run: cargo build --release --bins --features nnue-shared-shape
+      # The whole suite at the new shape. The suites whose expected values belong to the shipped v12 net
+      # skip there and say so (tests/common/mod.rs, is_shipped_net_this_builds_shape), because a build at
+      # this shape rightly refuses that net; nnue_incremental_test instead builds its own synthetic net at
+      # whatever shape the build was configured for, which is how a shape with no trained net is tested.
+      - name: Test (release, nnue-shared-shape)
+        run: |
+          set -o pipefail
+          cargo test --release --features nnue-shared-shape 2>&1 | tee new-shape-test.log
+      - name: Write the synthetic net at this build's shape
+        run: target-newshape/release/write_synthetic_net synthetic-net.bin
+      # The cross-port gate. `--hash` is mandatory in the script and its value is printed beside every
+      # node count: table size changes the collision pattern and so the node count at a fixed depth, so a
+      # node count with no table size next to it is not comparable — and it was precisely the absence of
+      # one that hid the 512-vs-64 default. The script asserts the synthetic net's size, SHA-256 and
+      # RNNUE1 header BEFORE searching it, so a drifted generator fails as a drifted generator rather
+      # than as a search regression. The same file, with the same six expected results, is committed in
+      # pawnstar and pawnstar-go: three independent assertions against one shared constant, so any port
+      # that drifts fails its own CI at its own commit, with no cross-repository fetch to go stale.
+      - name: Cross-port node-count signature (six positions, depth 8, Hash 64 MB)
+        run: |
+          set -o pipefail
+          tools/new-shape-signature.sh --hash 64 --net synthetic-net.bin --depth 8 \
+              target-newshape/release/pawnstar 2>&1 | tee new-shape-signature.log
+      - name: Signature in the job summary
+        if: always()
+        run: |
+          [ -f new-shape-signature.log ] || exit 0
+          {
+            echo '### The shared NNUE shape: cross-port node-count signature'
+            echo '```'
+            cat new-shape-signature.log
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
   # Windows x86-64 (MSVC toolchain), on GitHub's Windows Server 2025 image, which carries
   # Visual Studio's C++ build tools for the MSVC linker; dtolnay/rust-toolchain brings the same
   # stable toolchain as on Linux. The shell is Git Bash 5.x, which satisfies the "bash >= 4 with
