@@ -11,6 +11,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use pawnstar::constants::HASHTABLE_MEGABYTES;
+
 const MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
 const ENGINE: &str = env!("CARGO_BIN_EXE_pawnstar");
 
@@ -99,6 +101,18 @@ fn test_start_in_repo() {
     check(
         has_line(&out, "uciok") && has_line(&out, "readyok"),
         "the handshake",
+    );
+    // The Hash default is pinned to the exact number the handshake prints. pawnstar, pawnstar-rs and
+    // pawnstar-go are bit-exact with each other at a fixed depth only while their transposition tables
+    // are the same size - table size changes the collision pattern and so the node count - and `bench`
+    // pins 64 MB in all three, so the one cross-port gate there was could not see a default that had
+    // drifted. pawnstar-go's had, to 512, and every UCI `go` the three answered diverged for months
+    // (diagnosed 2026-10-27). Changing this number means changing it in all three ports together;
+    // claude-skills' reckless-nnue/scripts/hash-default-parity.sh compares the three binaries.
+    check(
+        has_line(&out, "option name Hash type spin default 64 min 1 max 4096")
+            && HASHTABLE_MEGABYTES == 64,
+        "the Hash default is 64, the value the C++ and Go ports advertise too",
     );
     check(
         has_line(&out, "evaluation ") && has_line(&out, "nnue "),

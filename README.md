@@ -564,7 +564,7 @@ and runs searches on a worker thread so `stop` and `ponderhit` are heard during 
 
 | Option | Type | Default | Effect |
 |---|---|---|---|
-| `Hash` | spin 1–4096 | 64 | Transposition table size in MB (reallocated and cleared). |
+| `Hash` | spin 1–4096 | 64 | Transposition table size in MB (reallocated and cleared). The default must stay **equal to the C++ and Go ports'** (`HASHTABLE_MEGABYTES`): table size changes the collision pattern and so the node count at a fixed depth, so an unequal default breaks the three ports' bit-exactness at every `go` — and invisibly, since `bench` pins 64 in all three. `tests/uci_binary_test.rs` pins the advertised line. |
 | `Threads` | spin 1–256 | cores | Lazy SMP thread count. |
 | `Move Overhead` | spin 0–5000 | 30 | Milliseconds held back from every hard deadline for GUI and network lag. |
 | `OwnBook` | check | true | Consult the opening book. |
