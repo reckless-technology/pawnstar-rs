@@ -652,7 +652,7 @@ The version is `MAJOR.MINOR.BUILD`, from git alone, the rule all of reckless-tec
 `build.rs` works it out (`git describe --tags --match 'v*.*' --exclude 'v*.*.*'`) and the engine reports it:
 `id name Pawnstar 1.0.0`, and in the banner. Nothing in the tree holds a version to edit (`Cargo.toml`'s is a fixed
 `0.0.0` placeholder). A tree with no mark reachable - a source tarball, a shallow clone, a fork without the tags -
-builds as `0.0.0`, with a warning.
+builds as `0.0.0`, with a warning. (No source archive is released: clone or fork the repository for the source.)
 
 `.github/workflows/release.yml` makes a release:
 
@@ -672,7 +672,7 @@ the image's own is 3.2 and the UCI shell suite would skip without a bash >= 4. T
 | `pawnstar-rs-<version>-windows-x86_64.exe` | the engine, Authenticode-signed through SSL.com eSigner (Jonathan Reckless) |
 | `pawnstar-rs-<version>-macos-arm64.zip` | the engine for Apple silicon, signed with a Developer ID (hardened runtime) and notarised by Apple |
 | `pawnstar-rs-<version>-linux-x86_64` | the engine for Linux |
-| `pawnstar-rs-<version>-source.tar.gz`, `-docs-html.zip` | the source at the commit, and the API documentation |
+| `pawnstar-rs-<version>-docs-html.zip` | the API documentation |
 
 The macOS engine ships in a zip because a bare binary can't carry a stapled notarisation ticket: Gatekeeper looks its
 ticket up online, and the zip keeps the executable bit through a browser's download. The signing runs from

@@ -21,11 +21,11 @@
 #     Gatekeeper finds its ticket online, as the release checks it does.
 #   A publishing run that would ship an unsigned binary fails instead.
 #
-# The files: pawnstar-rs-<version>-linux-x86_64, -windows-x86_64.exe and -macos-arm64.zip (the binary inside), the
-# source as -source.tar.gz (git archive at the commit) and the API documentation as -docs-html.zip (cargo doc). verify
-# opens the release as a draft and each job uploads straight onto it, so no workflow artifact stands between a build
-# and its release; publish makes the source and documentation (in a dry run too), checks all five are on the draft,
-# pushes the tag and takes the draft public. A failed job can be run again; a run that fails before it publishes leaves
+# The files: pawnstar-rs-<version>-linux-x86_64, -windows-x86_64.exe and -macos-arm64.zip (the binary inside), and the
+# API documentation as -docs-html.zip (cargo doc). No source archive is published - anyone who wants the source clones
+# or forks the repository. verify opens the release as a draft and each job uploads straight onto it, so no workflow
+# artifact stands between a build and its release; publish makes the documentation (in a dry run too), checks all four
+# are on the draft, pushes the tag and takes the draft public. A failed job can be run again; a run that fails before it publishes leaves
 # only a draft, which the next run replaces.
 #
 # Every job runs on a GitHub-hosted image named by its version - ubuntu-24.04, windows-2025 and macos-15 (Apple
@@ -330,12 +330,12 @@ jobs:
         if: always() && runner.os == 'macOS'
         run: tools/sign-macos.sh close
 
-  # The source and the documentation, made in a dry run too, so a release's first run of this job is not its first run
+  # The documentation, made in a dry run too, so a release's first run of this job is not its first run
   # at all; then, in a publishing run, the draft checked and published. Every step is safe to run again: an upload
   # replaces a file of the same name an earlier attempt left on the draft, and a tag an earlier attempt pushed is taken
   # as it stands when it names this commit.
   publish:
-    name: source, documentation, publish
+    name: documentation, publish
     needs: [verify, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -351,11 +351,10 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
       - uses: dtolnay/rust-toolchain@stable
-      - name: The source and the documentation
+      - name: The documentation
         run: |
           set -euo pipefail
           mkdir assets
-          git archive --format=tar.gz --prefix="pawnstar-rs-$VERSION/" -o "assets/pawnstar-rs-$VERSION-source.tar.gz" "$GITHUB_SHA"
           cargo doc --no-deps --release
           (cd target/doc && zip -qr "../../assets/pawnstar-rs-$VERSION-docs-html.zip" .)
           ls -l assets
@@ -378,7 +377,7 @@ jobs:
         if: env.PUBLISH != 'true'
         continue-on-error: true
         with:
-          name: source-and-docs
+          name: docs
           path: assets/*
           retention-days: 1
       - name: Publish the release
@@ -391,7 +390,7 @@ jobs:
           assets=$(gh api "$release" --jq '.assets[].name')
           missing=""
           for file in "pawnstar-rs-$VERSION-linux-x86_64" "pawnstar-rs-$VERSION-windows-x86_64.exe" \
-                      "pawnstar-rs-$VERSION-macos-arm64.zip" "pawnstar-rs-$VERSION-source.tar.gz" \
+                      "pawnstar-rs-$VERSION-macos-arm64.zip" \
                       "pawnstar-rs-$VERSION-docs-html.zip"; do
             grep -qx "$file" <<< "$assets" || { echo "::error::$file is not on the draft $TAG"; missing="$missing $file"; }
           done

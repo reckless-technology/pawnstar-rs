@@ -97,6 +97,7 @@ form on the **`license`** UCI command (`handle_license`/`LICENSE_NOTICE` in `src
 only, no engine state, checked by `uci_binary_test`), because a release binary travels without the tree. The
 file, `README.md`, `nnue/README.md` and that command must agree. The crate has **no** third-party code
 dependencies, and nothing here is adapted from bullet - that is the C++ repo's notice, not this one's.
+Releases publish **no source archive** (Jonny, 2026-10-30: clone or fork for the source).
 
 ## The parity contract (the one hard rule)
 
