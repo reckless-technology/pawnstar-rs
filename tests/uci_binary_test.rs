@@ -218,7 +218,7 @@ fn test_start_in_repo() {
         Path::new(ENGINE),
         Path::new(MANIFEST_DIR),
         &[],
-        "uci\nisready\nposition startpos\neval\nnnue\nbookmoves\nhelp\n",
+        "uci\nisready\nposition startpos\neval\nnnue\nbookmoves\nhelp\nlicense\n",
     );
     check(
         out.contains("Pawnstar: a UCI compatible chess engine"),
@@ -275,6 +275,22 @@ fn test_start_in_repo() {
     check(
         has_line(&out, "Available commands:"),
         "help lists the commands",
+    );
+    // The ODbL attribution the shipped net owes, printed by the engine itself: a release binary
+    // travels without the source tree, and ODbL asks that the notice accompany the Produced Work.
+    check(
+        out.contains("Position data from the Leela Chess Zero self-play training data")
+            && out.contains("http://opendatacommons.org/licenses/odbl/1.0/")
+            && out.contains("http://opendatacommons.org/licenses/dbcl/1.0/")
+            && out.contains("run test91")
+            && out.contains("run test60"),
+        "license prints the ODbL/DbCL attribution for the net's training data",
+    );
+    check(
+        out.contains("GNU General Public License, version 3")
+            && out.contains("public-domain TSCP")
+            && out.contains("Yoshie2000"),
+        "license prints the GPLv3 notice, the book's origin and the withdrawn data's credit",
     );
 }
 

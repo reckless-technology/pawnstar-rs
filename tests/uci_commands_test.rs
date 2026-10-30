@@ -142,16 +142,19 @@ fn test_dispatch() {
         "blank and unknown lines leave the position alone",
     );
     check(
-        HANDLERS.iter().any(|h| h.name == "quit") && HANDLERS.len() == 18,
-        "the handler table lists all eighteen commands",
+        HANDLERS.iter().any(|h| h.name == "quit")
+            && HANDLERS.iter().any(|h| h.name == "license")
+            && HANDLERS.len() == 19,
+        "the handler table lists all nineteen commands",
     );
     run(&mut engine, "help");
     run(&mut engine, "uci");
     run(&mut engine, "isready");
     run(&mut engine, "getboard");
+    run(&mut engine, "license");
     check(
         fen(&engine) == START_FEN,
-        "help / uci / isready / getboard are read-only",
+        "help / uci / isready / getboard / license are read-only",
     );
 }
 

@@ -89,6 +89,15 @@ binary eSigner-signed (publishing runs only - each signing spends the allowance)
 notarised in a zip, published as `v1.1.0`. `gh workflow run release.yml --ref <branch> -f dry_run=true` proves a
 change to it without publishing or spending a Windows signing.
 
+**Third-party notices.** `THIRD-PARTY-NOTICES.md` is the one place they live. The shipped net was trained
+entirely on the Leela Chess Zero self-play training data (ODbL-1.0, contents DbCL-1.0; runs `test91` 62.83%
+and `test60` 37.17%), and a trained net is an ODbL *Produced Work*, so distributing it obliges a notice
+naming the source - the obligation is the notice, not a licence on the net. The engine prints a condensed
+form on the **`license`** UCI command (`handle_license`/`LICENSE_NOTICE` in `src/input_handling.rs`, printing
+only, no engine state, checked by `uci_binary_test`), because a release binary travels without the tree. The
+file, `README.md`, `nnue/README.md` and that command must agree. The crate has **no** third-party code
+dependencies, and nothing here is adapted from bullet - that is the C++ repo's notice, not this one's.
+
 ## The parity contract (the one hard rule)
 
 The whole value of this port is bit-exactness with `../pawnstar`
