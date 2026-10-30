@@ -137,11 +137,12 @@ jobs:
   # one another.
   #
   # tools/new-shape-signature.sh is committed BYTE-IDENTICALLY in all three repositories (blob
-  # dab4a76b3c76ac63e22c8aab0eccf14812f67ffc, mode 100755): the six expected node counts live in it and
+  # 46aad8fe29e64d937e63851a8afba284abc6c7a2, mode 100755): the six expected node counts live in it and
   # nowhere else, so `diff` between the three repos is the whole audit and there is no second copy of the
-  # numbers to drift. Its own header comment still describes the shape as living behind a switch that
-  # defaults off, which stopped being true at release 2.0.0 - correcting that is a change to all three
-  # copies at once, so it is not made here, and the file is left alone on purpose.
+  # numbers to drift. Its header described the shape as living behind a switch that defaults off, which
+  # stopped being true at release 2.0.0; that was corrected on 2026-10-30 in all FOUR copies at once - these
+  # three plus nnue-training's pipeline/new-shape-signature.sh - which is the only way that file may be
+  # changed, since its byte-identity is what the audit consists of.
   #
   # `--hash` is mandatory in the script and its value is printed beside every node count: table size
   # changes the collision pattern and so the node count at a fixed depth, so a node count with no table

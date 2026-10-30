@@ -76,6 +76,32 @@ because a Rust integration test cannot share code with a binary: `nnue_increment
 `src/bin/write_synthetic_net.rs` both need the same bytes. Its payload is written out by hand, which
 is also a second opinion on the layout `load_from_memory` reads.
 
+## Rejected: widening `INT8_BOUND` to 64 (2026-10-30)
+
+`tests/nnue_test.rs` bounds how far the shipped int8 evaluator may sit from the exact int16 reference
+over the 250 reference positions. v12 measured 26-28 cp against a bound of 40; **v20 measures exactly
+40**, and this port raised the bound to 64 on the reasoning that a measured 40 against a bound of 40
+is a latent red CI. **That was reverted the same day** — the bound is 40 in all three ports again.
+
+The reasoning that beat it:
+
+- The rise is not drift. **One int8 scale is shared across all eight output heads**, so the head
+  carrying the largest weight sets the scale that every other head is requantised against. 40 is what
+  this shape produces, not a value creeping toward a limit.
+- It is **integer arithmetic**, so the deviation is exactly 40 on every platform, deterministically.
+  There is no marginal pass to tip over — this is not a tolerance whose headroom has been spent. The
+  three ports being bit-exact on node counts is the corroborating evidence that they compute the same
+  integers.
+- So 40 is a **tight and true** gate, and widening it weakens a deterministically passing check for
+  no gain. A looser bound would also have hidden a future net's head spread rather than reporting it.
+- **The real fix, if a future net's heads do spread wider, is a PER-HEAD int8 scale** — one scale
+  across eight heads is what couples them, and only a per-head scale decouples them. Reach for that,
+  not for a bigger number.
+
+The number is recorded in the comment at all three sites with what produced it: 40 cp over v20's 250
+reference positions, 2026-10-30. A bare tolerance with no record of its measurement is how this one
+came to sit exactly on the measured value unexamined.
+
 ## Two Rust-specific details worth remembering
 
 **`current_accumulator` takes `&mut self`**, so the evaluator's new `Position` argument could not
