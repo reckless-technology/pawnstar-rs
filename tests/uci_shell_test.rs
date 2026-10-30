@@ -45,10 +45,11 @@ fn bash_candidates() -> Vec<PathBuf> {
 
 #[test]
 fn uci_shell_suite() {
-    // The engine binary plays on the net it embeds — the shipped v12 asset — and a build at another
-    // NNUE shape refuses it and exits, which is the container working rather than a fault: nothing
-    // has been trained at that shape yet. These checks are about the binary's start-up, resources
-    // and command handling over a net it can read, so they stand down there.
+    // The engine binary plays on the net it embeds — the shipped v20 asset, at the shared shape
+    // this build defaults to — and a build at the retired v12 shape refuses it and exits, which is
+    // the container working rather than a fault: no net of that shape is in the tree any more.
+    // These checks are about the binary's start-up, resources and command handling over a net it
+    // can read, so they stand down there.
     if !common::is_net_this_builds_shape(common::SHIPPED_NET) {
         common::summary("UCI: skipped (the embedded net is not this build's NNUE shape)");
         return;

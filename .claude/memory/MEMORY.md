@@ -1,3 +1,3 @@
 - [pawnstar-rs port](pawnstar-rs-port.md) — bit-exact Rust port in ../pawnstar-rs; parity recipe + re-bless rules
 - [pawnstar-go port](pawnstar-go-port.md) — bit-exact Go port in ../pawnstar-go; binary/options + tournament evidence
-- [NNUE shape knobs](nnue-shape-knobs.md) — the two NNUE shapes behind Cargo features; the new shape's node-count gate, its own target dir, and the refresh rule that is silent when wrong
+- [NNUE shape knobs](nnue-shape-knobs.md) — the two NNUE shapes behind Cargo features, the shared one being the DEFAULT since release 2.0.0 and v12's the retired one; the synthetic net's node-count gate, the retired shape's own target dir, the --no-default-features overload, and the refresh rule that is silent when wrong

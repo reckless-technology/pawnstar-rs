@@ -24,10 +24,34 @@ use pawnstar::nnue::{
 };
 
 /// The shipped net, which the NNUE suites skip when it is absent (the C++ exit-0 contract).
-const NET: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/nnue/pawnstar-v12.bin");
+const NET: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/nnue/pawnstar-v20.bin");
 
-/// Whether this build is the shape the shipped net was trained for: mirroring off, one output head.
-const IS_V12_SHAPE: bool = !IS_KING_MIRRORING_ENABLED && NUM_OUTPUT_BUCKETS == 1;
+/// Whether the net in `image` is **this build's** shape, decided from the header's architecture
+/// fields and the bucket map's digest alone.
+///
+/// Deliberately **not** from the payload checksums, and deliberately **not** from a hardcoded
+/// "is this build v12's shape": a probe that reads the checksums lets a net *of this shape* that is
+/// corrupt skip quietly instead of failing loudly, which is the one thing this suite exists to
+/// catch; and a probe naming one shape goes stale the moment the shipped net changes shape, as
+/// it did when v20 replaced v12. So the probe asks only "does this net describe the architecture
+/// this build compiled", and everything else about the header — `qa`, `qb`, `eval_scale`,
+/// `activation`, a non-zero `reserved`, `payload_bytes`, both CRCs and the load itself — is left to
+/// `test_shipped_net` to check loudly.
+fn is_net_this_builds_shape(image: &[u8]) -> bool {
+    if image.len() < NET_HEADER_BYTES {
+        return false;
+    }
+    let header = NetHeader::from_bytes(image);
+    let expected = expected_net_header();
+    header.magic == expected.magic
+        && header.format_version == expected.format_version
+        && header.features_per_bucket == expected.features_per_bucket
+        && header.king_buckets == expected.king_buckets
+        && header.hidden_size == expected.hidden_size
+        && header.output_buckets == expected.output_buckets
+        && header.flags == expected.flags
+        && header.king_bucket_map_crc == expected.king_bucket_map_crc
+}
 
 fn check(condition: bool, message: &str) {
     common::check(condition, message);
@@ -394,14 +418,15 @@ fn nnue_container_suite() {
     test_header_layout();
     // The refusals are walked over the **synthetic** net, which is at whatever shape this build was
     // configured for, so this half runs at either shape and in a checkout with no .bin. The shipped
-    // net is v12's shape, and a build of another shape rightly refuses it — which is the container
-    // working, not a fault, so its own checks are skipped there rather than failed.
+    // net is the shared shape (v20, release 2.0.0), and a build of the retired v12 shape rightly
+    // refuses it — which is the container working, not a fault, so its own checks are skipped there
+    // rather than failed.
     test_refusals(&synthetic_net_image());
     match shipped_net_image() {
-        Some(image) if IS_V12_SHAPE => test_shipped_net(&image),
+        Some(image) if is_net_this_builds_shape(&image) => test_shipped_net(&image),
         Some(_) => println!(
-            "[PASS] the shipped net is v12's shape, which this build is not; its container checks \
-             are skipped (the synthetic net covers the refusals)"
+            "[PASS] the shipped net is not this build's NNUE shape; its container checks are \
+             skipped (the synthetic net covers the refusals)"
         ),
         None => println!("[PASS] the shipped net is absent; its container checks are skipped"),
     }

@@ -17,7 +17,7 @@ use pawnstar::moves::{Move, MoveType};
 use pawnstar::position::Position;
 use pawnstar::search_state::{evaluate_position, SearchState, Variation};
 
-const NET: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/nnue/pawnstar-v12.bin");
+const NET: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/nnue/pawnstar-v20.bin");
 
 fn check(condition: bool, message: &str) {
     common::check(condition, message);

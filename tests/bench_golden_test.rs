@@ -1,10 +1,14 @@
 //! Regression lock for the cross-engine parity gate.
 //!
-//! The blessed `bench` signature below was produced by the C++ reference engine
-//! (pawnstar @ commit 609, net pawnstar-v12.bin, PAWNSTAR_THREADS=1, depth 13) and verified
-//! byte-identical against this port — total node count, per-position node counts, best moves and
-//! all DEBUGX counters. Any search/eval/ordering change that alters these numbers breaks
-//! bit-exact parity with the C++ engine and must be flagged.
+//! The blessed `bench` signature below belongs to the shipped net **v20** (release 2.0.0) at the
+//! shared NNUE shape — king mirroring on, eight material output heads — which is this build's
+//! default: 16 positions at depth 13, single-threaded, Hash pinned to 64 MB by `bench` itself,
+//! total **5,617,906** nodes. The C++ reference engine and the Go port must produce the identical
+//! total and the identical per-position counts and best moves; a mismatch between the three is a
+//! defect in one of them, not a rounding difference.
+//!
+//! It replaced v12's 6,601,454 when v20 shipped. A net change moves these numbers by design — a
+//! *code* change that moves them breaks bit-exact parity with the C++ engine and must be flagged.
 //!
 //! Skipped (passes) when the shipped net is absent — the golden numbers are net-specific.
 
@@ -16,26 +20,26 @@ use pawnstar::chess_clock::ClockType;
 use pawnstar::game::Game;
 use pawnstar::input_handling::{BENCH_DEPTH, BENCH_FENS};
 
-/// (best move, node count) per bench position — C++ reference at depth 13, single-threaded.
+/// (best move, node count) per bench position — net v20 at depth 13, single-threaded.
 const GOLDEN: [(&str, u64); 16] = [
-    ("d6d1", 13710),
-    ("d4d5", 147492),
-    ("f8g8", 1230595),
-    ("e5e6", 582804),
-    ("c3d5", 410154),
-    ("g5g6", 180915),
-    ("d1c1", 911931),
-    ("f4f5", 170315),
-    ("f1b5", 686447),
-    ("f6d7", 552912),
-    ("f2f4", 514815),
-    ("d7f5", 261314),
-    ("b2b4", 324298),
-    ("d1d2", 271979),
-    ("g4g7", 119154),
-    ("d2e4", 222619),
+    ("d6d1", 12124),
+    ("d4d5", 158702),
+    ("f8g8", 356067),
+    ("e5e6", 706104),
+    ("c3d5", 411424),
+    ("g5g6", 83001),
+    ("f3g3", 363104),
+    ("f4f5", 108017),
+    ("f1b5", 455575),
+    ("b6c5", 603920),
+    ("f2f4", 732278),
+    ("d7f5", 398390),
+    ("b2b4", 484449),
+    ("d1e1", 239053),
+    ("g4g7", 160967),
+    ("d2e4", 344731),
 ];
-const GOLDEN_TOTAL: u64 = 6_601_454;
+const GOLDEN_TOTAL: u64 = 5_617_906;
 
 #[test]
 fn bench_matches_cpp_golden_signature() {

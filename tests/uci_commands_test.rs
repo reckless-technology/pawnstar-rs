@@ -20,7 +20,7 @@ use pawnstar::input_handling::{
 };
 use pawnstar::moves::Move;
 
-const NET: &str = "nnue/pawnstar-v12.bin";
+const NET: &str = "nnue/pawnstar-v20.bin";
 const BOOK: &str = "pawnstar.book";
 
 fn check(condition: bool, message: &str) {

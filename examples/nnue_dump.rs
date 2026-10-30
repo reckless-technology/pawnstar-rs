@@ -6,7 +6,7 @@ fn main() {
     assert!(net
         .load(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/nnue/pawnstar-v12.bin"
+            "/nnue/pawnstar-v20.bin"
         ))
         .is_loaded());
     let stdin = std::io::read_to_string(std::io::stdin()).unwrap();

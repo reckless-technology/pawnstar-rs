@@ -10,7 +10,9 @@ metadata:
 `/Users/jonny/work/pawnstar-rs` (created 2026-07-03, pushed to
 git@github.com:jonny-reckless/pawnstar-rs.git main) is a mechanical Rust port of the C++ engine,
 **bit-exact** with it: single-threaded fixed-depth search produces identical node counts, best
-moves, PVs and DEBUGX counters (bench depth 13 = 6,888,983 nodes, C++ commit 609 / net v12).
+moves, PVs and DEBUGX counters (bench depth 13 = 6,888,983 nodes, C++ commit 609 / net v12 — a
+historical figure; the live one is **5,617,906** on net v20 at the shared NNUE shape, release 2.0.0,
+and `GOLDEN_TOTAL` in `tests/bench_golden_test.rs` is its only home).
 Modules map 1:1 to the C++ headers (snake_case names; `move.h` → `moves.rs`); all eight test
 suites are ported as cargo integration tests plus a `tests/bench_golden_test.rs` that locks the
 per-position bench signature.

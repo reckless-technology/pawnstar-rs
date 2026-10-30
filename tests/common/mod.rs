@@ -33,7 +33,7 @@ pub fn summary(detail: &str) -> i32 {
 }
 
 /// The shipped net asset, which the engine also embeds.
-pub const SHIPPED_NET: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/nnue/pawnstar-v12.bin");
+pub const SHIPPED_NET: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/nnue/pawnstar-v20.bin");
 
 /// The net a suite should read: `PAWNSTAR_EVALFILE` where it is set, otherwise the shipped asset.
 pub fn shipped_net_path() -> String {
@@ -42,12 +42,17 @@ pub fn shipped_net_path() -> String {
 
 /// Whether the net at `path` is present **and of this build's NNUE shape**.
 ///
-/// A build at the shared architecture (the `nnue-shared-shape` features) rightly refuses v12's net,
-/// naming `format_version` — the container working rather than a fault, since nothing has been
-/// trained at that shape yet. A suite that needs a *trained* net therefore skips there, exactly as
-/// it skips when the file is absent, which is the C++ exit-0 contract extended to the shape knobs.
-/// The shape-independent suites run either way, and the new shape's own gates are
-/// `nnue_incremental_test`'s synthetic net and the node-count signature in `nnue/README.md`.
+/// A build at the retired v12 shape (`--no-default-features --features debugx`) rightly refuses
+/// the shipped v20 net, naming `format_version` — the container working rather than a fault, since
+/// no net of that shape is in the tree any more. A suite that needs a *trained* net therefore skips
+/// there, exactly as it skips when the file is absent, which is the C++ exit-0 contract extended to
+/// the shape knobs. The shape-independent suites run either way, and a shape with no net of its own
+/// is gated by `nnue_incremental_test`'s synthetic net and the node-count signature in
+/// `nnue/README.md`.
+///
+/// Note this reads `Network::load`, which verifies the payload checksums too, so a net *of this
+/// shape* that is corrupt would skip here rather than fail. `nnue_container_test` has its own
+/// header-only probe for exactly that reason, and it is the suite whose job is to catch corruption.
 pub fn is_net_this_builds_shape(path: &str) -> bool {
     std::path::Path::new(path).exists() && pawnstar::nnue::Network::default().load(path).is_loaded()
 }

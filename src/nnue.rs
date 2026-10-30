@@ -5,20 +5,22 @@
 //!
 //! ```text
 //!   768 inputs per (perspective, king bucket)  ->  HIDDEN_SIZE feature transformer  (x2 perspectives)
-//!   SCReLU activation, concat[own | opponent] = 2*HIDDEN_SIZE  ->  1 output (centipawns, stm relative)
+//!   SCReLU activation, concat[own | opponent] = 2*HIDDEN_SIZE  ->  NUM_OUTPUT_BUCKETS heads
+//!                                                                  (centipawns, stm relative)
 //! ```
 //!
-//! The shipped net (**v12**) is **1024-wide with NUM_KING_BUCKETS = 8** — eight king-square weight
-//! banks selected by king file-pair × board-half (`KING_BUCKET_MAP`). Each perspective selects one
-//! bank by *its own* king's square (in that perspective's orientation), the feature row being
-//! `bucket * 768 + chess768_index`, matching bullet's `ChessBuckets`.
+//! The shipped net (**v20**, release 2.0.0) is **1024-wide with NUM_KING_BUCKETS = 8 and eight
+//! material output heads** — eight king-square weight banks selected by the king's *mirrored*
+//! file × board-half (`KING_BUCKET_MAP`). Each perspective selects one bank by *its own* king's
+//! square (in that perspective's orientation), the feature row being
+//! `bucket * 768 + chess768_index`, matching bullet's `ChessBucketsMirrored`.
 //!
 //! Two parts of the shape are **compile-time knobs**, the Cargo features
 //! `nnue-king-mirroring` and `nnue-output-buckets-8` (together, `nnue-shared-shape`), so that
-//! either shape can be built from one tree while the three bit-exact ports are brought across one
-//! at a time. The defaults are v12's shape; the shared architecture every reckless-technology
-//! chess engine is moving onto adds horizontal king mirroring and eight material output heads.
-//! Both are stamped into every net's header, so a net can only load into a build of its own shape.
+//! either shape can be built from one tree. **Both are in `default` as of release 2.0.0**, that
+//! being the shape the shipped net needs; dropping the defaults gives the retired v12 shape, which
+//! has no net in the tree any more. Both are stamped into every net's header, so a net can only
+//! load into a build of its own shape.
 //!
 //! This port ships the scalar kernels, which the C++ documents (and tests) as bit-identical to its
 //! AVX2/VNNI kernels; x86 SIMD is a later parity-locked perf phase.
@@ -257,9 +259,10 @@ pub fn expected_net_header() -> NetHeader {
 /// A complete `RNNUE1` image — the 64-byte header this build stamps, then the payload — at **this
 /// build's shape**, with deterministic pseudo-random weights.
 ///
-/// At the shared architecture (mirroring on, 8 output heads) no trained net exists yet: the shipped
-/// v12 net is a different shape and is rightly refused. This is what lets the new shape be tested
-/// and *measured* before a net exists for it.
+/// At a shape with no trained net in the tree — which, since release 2.0.0 removed v12's net, is
+/// what the retired v12 shape always is — the shipped net is a different shape and is rightly
+/// refused, so `bench` cannot run. This is what lets such a shape be tested and *measured* with no
+/// net of its own, and it is how the shared shape was measured before v20 existed for it.
 ///
 /// Two uses, and both need the bytes to be identical everywhere:
 ///

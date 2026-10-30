@@ -2,10 +2,12 @@
 //! (The C++ equivalent is `test_nnue_incremental --write-synthetic-net <path>`.)
 //!
 //! This is what gives a shape nothing has been trained for a **node-count signature** before it
-//! has a net. At the shared architecture the engine rightly refuses the shipped v12 net, so `bench`
-//! cannot run, and over random weights a depth-13 search barely prunes and does not finish in any
-//! useful time — which left the new shape with no node count at all, and so no way to check that
-//! two platforms, or the three bit-exact ports, agree on it.
+//! has a net. At such a shape the engine rightly refuses the shipped net, so `bench` cannot run,
+//! and over random weights a depth-13 search barely prunes and does not finish in any useful time
+//! — which left the shape with no node count at all, and so no way to check that two platforms,
+//! or the three bit-exact ports, agree on it. It is how the shared shape was measured before v20
+//! was trained for it, and it is the only node-count gate the retired v12 shape now has, v12's own
+//! net having been removed in release 2.0.0.
 //!
 //! The net comes from a fixed seed through fixed integer arithmetic (`nnue::synthetic_net_image`),
 //! so its bytes are identical on every platform and in every port, and

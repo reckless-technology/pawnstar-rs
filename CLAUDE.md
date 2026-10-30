@@ -30,20 +30,25 @@ cargo llvm-cov --release --ignore-filename-regex 'src/bin/' --summary-only   # l
 cargo fmt --check && cargo clippy --release      # style gates (fmt is enforced; clippy advisory)
 cargo run --release --bin stamp_net -- <in> <out>    # stamp a net into RNNUE1 (see nnue/README.md)
 cargo run --release --bin dump_magics
-cargo run --release --bin write_synthetic_net -- <out>   # the new NNUE shape's parity net (nnue/README.md)
+cargo run --release --bin write_synthetic_net -- <out>   # the shared shape's parity net (nnue/README.md)
 
-# The shared NNUE shape (king mirroring + 8 output heads), in a target directory of its own
-CARGO_TARGET_DIR=target-newshape cargo test --release --features nnue-shared-shape
+# The RETIRED v12 NNUE shape (mirroring off, one output head), in a target directory of its own
+CARGO_TARGET_DIR=target-v12shape cargo test --release --no-default-features --features debugx
 ```
 
 **The NNUE shape is a compile-time knob**, the Cargo features `nnue-king-mirroring` and
-`nnue-output-buckets-8` (together `nnue-shared-shape`), defaulting to the v12 shape the shipped net
-was trained for. A new-shape build **refuses** `nnue/pawnstar-v12.bin` naming `format_version`, which
-is the container working rather than a fault, and the suites that need a trained net skip there and
-say so. A shape change is an evaluation change: it moves the bench signature and breaks parity with
-`../pawnstar` and `../pawnstar-go`, so it lands in all three together or not at all. The new shape's
-gate is a node-count signature over a synthetic net rather than `bench` — `nnue/README.md`, "The two
-network shapes".
+`nnue-output-buckets-8` (together `nnue-shared-shape`). **Both are in `default` as of release
+2.0.0**: the shipped net `nnue/pawnstar-v20.bin` is the shared shape, so a default build is the
+only build that can load it. Dropping the defaults gives the retired v12 shape, which still
+builds and whose suites still run — but `--no-default-features` drops the shape *and* DEBUGX, so
+the DEBUGX-free build of the shipped shape is `--no-default-features --features
+nnue-shared-shape`. A v12-shape build **refuses** `nnue/pawnstar-v20.bin` naming `format_version`,
+which is the container working rather than a fault, and the suites that need a trained net skip
+there and say so: no net of that shape is in the tree any more. A shape change is an evaluation
+change: it moves the bench signature and breaks parity with `../pawnstar` and `../pawnstar-go`, so
+it lands in all three together or not at all, as the flip to these defaults did. The retired
+shape's gate is a node-count signature over a synthetic net rather than `bench` —
+`nnue/README.md`, "The two network shapes".
 
 Profiles: `dev` is opt-level 3 **with overflow checks** (intentional wraps use `wrapping_*`; a
 panic here means a porting bug); `release` matches C++ semantics. Tests inherit dev; run heavy
@@ -88,10 +93,10 @@ change to it without publishing or spending a Windows signing.
 
 The whole value of this port is bit-exactness with `../pawnstar`
 (https://github.com/jonny-reckless/pawnstar). `tests/bench_golden_test.rs` locks the signature:
-bench depth 13, single-threaded = **6,601,454 nodes** with fixed per-position node counts and best
-moves (net v12; `GOLDEN_TOTAL` is the number's one home). The Go port (../pawnstar-go) shares the same signature; a
-900-game round-robin at 10+0.1 put all three engines within error bars (C++ vs Rust: an exact
-150–150 tie).
+bench depth 13, single-threaded = **5,617,906 nodes** with fixed per-position node counts and best
+moves (net **v20**, release 2.0.0; it was 6,601,454 on v12, and `GOLDEN_TOTAL` is the number's one home). The Go
+port (../pawnstar-go) shares the same signature; a 900-game round-robin at 10+0.1 put all three engines within error
+bars (C++ vs Rust: an exact 150–150 tie).
 
 - **Never** replace `sort_moves` with `sort`/`sort_unstable` — the stable descending insertion
   sort is load-bearing for cross-engine determinism (equal-score moves keep generation order).
@@ -146,5 +151,8 @@ the shared NNUE container (`nnue_container_test.rs`: CRC-64/XZ against its publi
 stdout and stderr both, each leaving the net already loaded playing, and a refused net never replaced by the embedded
 one)
 and the library helpers the search does not call (`library_api_test.rs`). NNUE-dependent suites skip (pass) when
-`nnue/pawnstar-v12.bin` is absent, preserving the C++ exit-0 contract. Shipping a new net follows
-the C++ checklist (../pawnstar/nnue/README.md §7) plus re-blessing the golden test here.
+`nnue/pawnstar-v20.bin` is absent **or is not this build's NNUE shape**, preserving the C++ exit-0 contract.
+Shipping a new net follows the C++ checklist (../pawnstar/nnue/README.md §7) plus, here, re-blessing the golden
+test, regenerating `tests/nnue_reference.txt`, re-recording the Bratko-Kopec accepted moves over depths 8–11 and
+re-measuring the int8 bound in `tests/nnue_test.rs` — all four are net-specific (`nnue/README.md`, "Shipping a
+new net to this repo").

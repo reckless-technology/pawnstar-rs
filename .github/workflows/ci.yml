@@ -31,7 +31,9 @@ jobs:
       # keeping — but it must NOT hardcode a second copy of the signature. It used to, and that copy
       # silently drifted: when the golden was re-blessed 6,888,983 -> 6,601,454 for the depth-weighted
       # history change, this literal was missed and CI stayed red for three commits. Derive it from the
-      # single source of truth instead: GOLDEN_TOTAL in tests/bench_golden_test.rs.
+      # single source of truth instead: GOLDEN_TOTAL in tests/bench_golden_test.rs. It has since been
+      # re-blessed again, 6,601,454 -> 5,617,906, when net v20 shipped in release 2.0.0 - and this step
+      # needed no edit, which is the arrangement working.
       - name: Bench determinism signature
         run: |
           want=$(grep -oP 'GOLDEN_TOTAL:\s*u64\s*=\s*\K[0-9_]+' tests/bench_golden_test.rs | tr -d '_')
@@ -80,60 +82,91 @@ jobs:
       - run: cargo fmt --check
 
   # ---------------------------------------------------------------------------------------------------
-  # The SHARED NNUE SHAPE — horizontal king mirroring plus 8 material output heads — which every job
-  # above leaves entirely untested, because the shape is behind Cargo features that default off and they
-  # all exercise the default. That path is about to carry a freshly trained net the whole project
-  # depends on, and a gated path with no CI rots silently: pawnstar-go's transposition table defaulted
-  # to 512 MB against this port's 64 MB from May until 2026-10-27, through every release, because the
-  # only cross-port gate that ran was `bench` and `bench` pins the table to 64 MB in all three. A gate
-  # that controls for a difference cannot detect it.
+  # The RETIRED v12 NNUE SHAPE - mirroring off, one output head - which every job above now leaves
+  # entirely untested, because release 2.0.0 made the shared shape (king mirroring + 8 material output
+  # heads) the Cargo default and they all exercise the default. This job is the mirror image of the one
+  # that stood here before the flip, and it exists for the same reason: a gated path with no CI rots
+  # silently, and the cost of that is already measured - pawnstar-go's transposition table defaulted to
+  # 512 MB against this port's 64 MB from May until 2026-10-27, through every release, because the only
+  # cross-port gate that ran was `bench` and `bench` pins the table to 64 MB in all three. A gate that
+  # controls for a difference cannot detect it.
   #
-  # Its own job rather than a feature matrix on build-test, for three reasons. The default shape's bench
-  # golden, its coverage percentage and its node counts must not move, and a matrix would recompute all
-  # of them; the two shapes' failures stay distinguishable at a glance, where a matrix leg reads as "the
-  # build broke"; and the job runs concurrently with the others, so it adds a name to the list rather
-  # than minutes to the critical path. Linux only: the shape is integer arithmetic chosen at compile
-  # time, and the synthetic net is proven byte-identical across platforms (the script asserts its
-  # SHA-256 every run), so a Windows leg would double the cost for no new failure mode.
+  # There is no trained net of this shape in the tree any more - v12's was removed when 2.0.0 shipped -
+  # so the suites whose expected values need one skip and say so (tests/common/mod.rs,
+  # is_shipped_net_this_builds_shape, and nnue_container_test's own header-derived shape probe), exactly
+  # as they skip when the net file is absent. What still runs is everything shape-independent plus
+  # nnue_incremental_test, which builds its own synthetic net at whatever shape the build was configured
+  # for. That is what makes this job worth its minutes: it proves the retired shape still compiles and
+  # still evaluates self-consistently, which is all anyone can ask of a shape with no net.
+  #
+  # Its own job rather than a feature matrix on build-test, for three reasons unchanged from before: the
+  # default shape's bench golden, its coverage percentage and its node counts must not move, and a matrix
+  # would recompute all of them; the two shapes' failures stay distinguishable at a glance, where a matrix
+  # leg reads as "the build broke"; and the job runs concurrently with the others, so it adds a name to
+  # the list rather than minutes to the critical path. Linux only: the shape is integer arithmetic chosen
+  # at compile time, so a Windows leg would double the cost for no new failure mode.
   # ---------------------------------------------------------------------------------------------------
-  new-shape:
-    name: new NNUE shape (mirroring + 8 output heads)
+  v12-shape:
+    name: retired v12 NNUE shape (no mirroring, one output head)
     runs-on: ubuntu-24.04
     env:
       # A target directory of its own, as nnue/README.md says: not only to keep the two feature sets'
       # artifacts apart, but because MSVC's linker has been seen to fail with LNK1201 on a PDB the other
-      # feature set wrote. /target-* is gitignored, so the same command works in a developer's checkout.
-      CARGO_TARGET_DIR: target-newshape
+      # feature set wrote - which it did again when these defaults were flipped. /target-* is gitignored,
+      # so the same command works in a developer's checkout.
+      CARGO_TARGET_DIR: target-v12shape
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # the tags and the history: build.rs derives the version from them
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build (release, nnue-shared-shape)
-        run: cargo build --release --bins --features nnue-shared-shape
-      # The whole suite at the new shape. The suites whose expected values belong to the shipped v12 net
-      # skip there and say so (tests/common/mod.rs, is_shipped_net_this_builds_shape), because a build at
-      # this shape rightly refuses that net; nnue_incremental_test instead builds its own synthetic net at
-      # whatever shape the build was configured for, which is how a shape with no trained net is tested.
-      - name: Test (release, nnue-shared-shape)
+      # --no-default-features drops the two shape features AND debugx, so debugx is asked for back by
+      # name: this leg is about the shape, not about the diagnostic counters.
+      - name: Build (release, retired v12 shape)
+        run: cargo build --release --bins --no-default-features --features debugx
+      - name: Test (release, retired v12 shape)
         run: |
           set -o pipefail
-          cargo test --release --features nnue-shared-shape 2>&1 | tee new-shape-test.log
+          cargo test --release --no-default-features --features debugx 2>&1 | tee v12-shape-test.log
+
+  # ---------------------------------------------------------------------------------------------------
+  # The CROSS-PORT NODE-COUNT SIGNATURE over the deterministic synthetic net. This is the gate that keeps
+  # pawnstar, pawnstar-rs and pawnstar-go bit-exact at the shared shape, and it is independent of which
+  # net is shipped: `bench` locks the signature over the *shipped* net (build-test, above), while this
+  # locks it over a net generated from nothing, so a net change and a code change cannot be confused for
+  # one another.
+  #
+  # tools/new-shape-signature.sh is committed BYTE-IDENTICALLY in all three repositories (blob
+  # dab4a76b3c76ac63e22c8aab0eccf14812f67ffc, mode 100755): the six expected node counts live in it and
+  # nowhere else, so `diff` between the three repos is the whole audit and there is no second copy of the
+  # numbers to drift. Its own header comment still describes the shape as living behind a switch that
+  # defaults off, which stopped being true at release 2.0.0 - correcting that is a change to all three
+  # copies at once, so it is not made here, and the file is left alone on purpose.
+  #
+  # `--hash` is mandatory in the script and its value is printed beside every node count: table size
+  # changes the collision pattern and so the node count at a fixed depth, so a node count with no table
+  # size next to it is not comparable - and it was precisely the absence of one that hid the 512-vs-64
+  # default. The script asserts the synthetic net's size, SHA-256 and RNNUE1 header BEFORE searching it,
+  # so a drifted generator fails as a drifted generator rather than as a search regression.
+  # ---------------------------------------------------------------------------------------------------
+  shape-signature:
+    name: cross-port node-count signature (synthetic net)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the tags and the history: build.rs derives the version from them
+      - uses: dtolnay/rust-toolchain@stable
+      # No --features: since release 2.0.0 the default shape IS the shared shape this gate measures.
+      - name: Build (release)
+        run: cargo build --release --bins
       - name: Write the synthetic net at this build's shape
-        run: target-newshape/release/write_synthetic_net synthetic-net.bin
-      # The cross-port gate. `--hash` is mandatory in the script and its value is printed beside every
-      # node count: table size changes the collision pattern and so the node count at a fixed depth, so a
-      # node count with no table size next to it is not comparable — and it was precisely the absence of
-      # one that hid the 512-vs-64 default. The script asserts the synthetic net's size, SHA-256 and
-      # RNNUE1 header BEFORE searching it, so a drifted generator fails as a drifted generator rather
-      # than as a search regression. The same file, with the same six expected results, is committed in
-      # pawnstar and pawnstar-go: three independent assertions against one shared constant, so any port
-      # that drifts fails its own CI at its own commit, with no cross-repository fetch to go stale.
+        run: target/release/write_synthetic_net synthetic-net.bin
       - name: Cross-port node-count signature (six positions, depth 8, Hash 64 MB)
         run: |
           set -o pipefail
           tools/new-shape-signature.sh --hash 64 --net synthetic-net.bin --depth 8 \
-              target-newshape/release/pawnstar 2>&1 | tee new-shape-signature.log
+              target/release/pawnstar 2>&1 | tee new-shape-signature.log
       - name: Signature in the job summary
         if: always()
         run: |

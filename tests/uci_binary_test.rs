@@ -231,17 +231,17 @@ fn test_start_in_repo() {
         "no fallback from the repository root",
     );
     check(
-        err.contains("loaded net 'nnue/pawnstar-v12.bin'"),
+        err.contains("loaded net 'nnue/pawnstar-v20.bin'"),
         "the net from the working directory",
     );
     // The loaded net is announced as a refusal is: an `info string` on stdout, where a GUI reads it, and the
     // bare line on stderr, which a harness keeps. Once it was stderr alone, with the prefix on it.
     check(
-        has_line(&out, "info string NNUE: loaded net 'nnue/pawnstar-v12.bin'"),
+        has_line(&out, "info string NNUE: loaded net 'nnue/pawnstar-v20.bin'"),
         "stdout says, as an info string, which net loaded",
     );
     check(
-        has_line(&err, "NNUE: loaded net 'nnue/pawnstar-v12.bin'"),
+        has_line(&err, "NNUE: loaded net 'nnue/pawnstar-v20.bin'"),
         "stderr carries the loaded net too, with no protocol prefix",
     );
     check(
@@ -299,7 +299,7 @@ fn test_evalfile_override() {
     // An override naming the shipped net loads it from there.
     let net = Path::new(MANIFEST_DIR)
         .join("nnue")
-        .join("pawnstar-v12.bin");
+        .join("pawnstar-v20.bin");
     let net = net.to_string_lossy().into_owned();
     let (out, err) = run_engine(
         Path::new(ENGINE),
@@ -357,8 +357,8 @@ fn test_resources_beside_the_executable() {
     // The book in the executable's parent, the net in the executable's own directory.
     std::fs::copy(repo.join("pawnstar.book"), root.join("pawnstar.book")).expect("copy the book");
     std::fs::copy(
-        repo.join("nnue").join("pawnstar-v12.bin"),
-        bin.join("nnue").join("pawnstar-v12.bin"),
+        repo.join("nnue").join("pawnstar-v20.bin"),
+        bin.join("nnue").join("pawnstar-v20.bin"),
     )
     .expect("copy the net");
 
@@ -420,7 +420,7 @@ fn test_quit() {
 fn test_refused_net_does_not_fall_back() {
     let net = Path::new(MANIFEST_DIR)
         .join("nnue")
-        .join("pawnstar-v12.bin");
+        .join("pawnstar-v20.bin");
     let Ok(mut image) = std::fs::read(&net) else {
         check(
             true,
@@ -478,7 +478,7 @@ fn test_refused_evalfile_is_loud_and_names_the_kept_net() {
     // on a checksum — the same shape of mistake as pointing the engine at another engine's net.
     let shipped = Path::new(MANIFEST_DIR)
         .join("nnue")
-        .join("pawnstar-v12.bin");
+        .join("pawnstar-v20.bin");
     let Ok(image) = std::fs::read(&shipped) else {
         check(
             true,
@@ -497,7 +497,7 @@ fn test_refused_evalfile_is_loud_and_names_the_kept_net() {
     let incompatible_path = incompatible_path.to_string_lossy().into_owned();
 
     // Started from the repository root, so the net now playing is the shipped one, by that name.
-    const KEPT_NET: &str = "nnue/pawnstar-v12.bin";
+    const KEPT_NET: &str = "nnue/pawnstar-v20.bin";
     let mut engine = DrivenEngine::start(
         Path::new(ENGINE),
         Path::new(MANIFEST_DIR),
@@ -593,10 +593,11 @@ fn test_refused_evalfile_is_loud_and_names_the_kept_net() {
 
 #[test]
 fn uci_binary_suite() {
-    // The engine binary plays on the net it embeds — the shipped v12 asset — and a build at another
-    // NNUE shape refuses it and exits, which is the container working rather than a fault: nothing
-    // has been trained at that shape yet. These checks are about the binary's start-up, resources
-    // and command handling over a net it can read, so they stand down there.
+    // The engine binary plays on the net it embeds — the shipped v20 asset, at the shared shape
+    // this build defaults to — and a build at the retired v12 shape refuses it and exits, which is
+    // the container working rather than a fault: no net of that shape is in the tree any more.
+    // These checks are about the binary's start-up, resources and command handling over a net it
+    // can read, so they stand down there.
     if !common::is_net_this_builds_shape(common::SHIPPED_NET) {
         common::summary("UCI binary: skipped (the embedded net is not this build's NNUE shape)");
         return;

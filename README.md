@@ -7,7 +7,7 @@ buckets). A sibling [Go port](https://github.com/jonny-reckless/pawnstar-go) exi
 bit-exact with one another.
 
 **Bit-exact with the C++ original.** At a fixed depth, single-threaded, this port runs exactly the same search as
-the C++ engine: `bench` = **6,601,454 nodes** at depth 13. The per-position node counts, best moves, PVs, scores and
+the C++ engine: `bench` = **5,617,906 nodes** at depth 13 (net v20; it was 6,601,454 on v12). The per-position node counts, best moves, PVs, scores and
 every DEBUGX diagnostic counter are byte-identical to the C++ reference. This was checked by diffing transcripts at
 depths 8 to 13, and `tests/bench_golden_test.rs` locks it in.
 
@@ -26,13 +26,15 @@ cargo build --release          # engine → target/release/pawnstar (net + book 
 ```
 
 Point any UCI GUI (Arena, Cute Chess, etc.) at the binary; it needs no configuration. The engine loads
-`nnue/pawnstar-v12.bin` and `pawnstar.book` from the working directory, or from the executable's directory or its
+`nnue/pawnstar-v20.bin` and `pawnstar.book` from the working directory, or from the executable's directory or its
 parent. If neither file can be read, it falls back to the copies embedded in the binary (`include_bytes!`, the C++
 `.incbin`), so the executable is self-contained.
 
 The `dev` profile builds at opt-level 3 **with overflow checks on**. Every intended wrap is spelled `wrapping_*`, so
 an overflow panic in a dev build means a porting bug. The `release` profile matches the C++ semantics. Diagnostic
-counters (DEBUGX) are compiled in by default; `--no-default-features` leaves them out (the C++ `RELEASE=1`).
+counters (DEBUGX) are compiled in by default; `--no-default-features` leaves them out (the C++ `RELEASE=1`) —
+but it drops the NNUE shape features too, so a DEBUGX-free build of the shipped shape is
+`--no-default-features --features nnue-shared-shape`.
 
 ```bash
 cargo run --release --bin stamp_net -- <in.bin> <stamped.bin>    # stamp a trainer net into the RNNUE1 container
@@ -78,9 +80,9 @@ bash test/uci_test.sh target/release/pawnstar     # the UCI integration suite on
 | `library_api_test` | Rust only: the public helpers the search never calls, the net loader's refusals, the book's in-memory form and display, the material-draw rules and the FEN reader's fallbacks. |
 | `fifty_move_clock_test` | Rust only: castling advances the fifty-move clock and only captures and pawn moves restart it, the FEN after each castling reads back, a castling on the hundredth ply is a draw to the search and the eval, and the repetition scan walks past a castling without a false match. |
 | `generated_data_test` | Rust only: golden values for the Zobrist keys and magic tables, printed by the C++. A unit test in `src/generated_data.rs` runs the tables' `const` generators at run time and holds them to the tables the compiler baked. |
-| `bench_golden_test` | Rust only: the 6,601,454-node `bench` signature, and each position's node count and best move. |
+| `bench_golden_test` | Rust only: the 5,617,906-node `bench` signature, and each position's node count and best move. |
 
-The NNUE-dependent suites skip (and pass) when `nnue/pawnstar-v12.bin` is absent, as the C++ suites exit 0 without
+The NNUE-dependent suites skip (and pass) when `nnue/pawnstar-v20.bin` is absent, as the C++ suites exit 0 without
 it. Shipping a new net follows the C++ checklist (`../pawnstar/nnue/README.md` §7), plus re-blessing the golden test
 here.
 
@@ -461,22 +463,25 @@ bullet's `ChessBuckets` features:
 
 ```
 768 inputs per (perspective, king bucket)  →  1024 feature transformer, shared by both perspectives
-SCReLU,  concat[side to move | other side] = 2048  →  1 output (centipawns, side to move)
+SCReLU,  concat[side to move | other side] = 2048  →  8 output heads (centipawns, side to move)
 QA = 255, QB = 64, SCALE = 400
 ```
 
-**King buckets.** Each perspective picks one of **8** weight banks by its own king's square (`KING_BUCKET_MAP`). The
-bank is the king's file pair (a–b, c–d, e–f, g–h), plus 4 when the king has advanced into the far half of the board.
-The file pairs follow king safety and the castled king's pawn shelter; the rank split separates a sheltered king from
-an active one.
+**King buckets.** Each perspective picks one of **8** weight banks by its own king's square (`KING_BUCKET_MAP`). On
+the shipped shape the bank is the king's *mirrored* file, `min(file, 7 − file)`, plus 4 when the king has advanced
+into the far half of the board: the perspective itself is mirrored first, so a and h are one bucket. The rank split
+separates a sheltered king from an active one. (The retired v12 shape used unmirrored file *pairs* — a–b, c–d, e–f,
+g–h — which is why turning mirroring on changes what a bucket means and not merely how many there are.)
 
 **Two shapes, one tree.** The shared architecture every reckless-technology chess engine is moving onto adds
 horizontal **king mirroring** (a perspective whose own king stands on files e–h is mirrored, `square ^ 7`, before
 indexing, and the map becomes `half·4 + min(file, 7 − file)` — per file rather than per file pair) and **8 material
 output heads** (`(piece_count − 2) / 4`). Both are compile-time: the Cargo features `nnue-king-mirroring` and
-`nnue-output-buckets-8`, together `nnue-shared-shape`, defaulting off to v12's shape. They are stamped into every
+`nnue-output-buckets-8`, together `nnue-shared-shape`, **both in `default` since release 2.0.0** because the shipped
+net needs them; the retired v12 shape is `--no-default-features --features debugx`. They are stamped into every
 net's header, so a net only ever loads into a build of its own shape. A shape change is an evaluation change, so it
-lands in `pawnstar`, `pawnstar-rs` and `pawnstar-go` together or not at all. See
+lands in `pawnstar`, `pawnstar-rs` and `pawnstar-go` together or not at all — as this flip did, with one net and
+one new bench signature in all three. See
 [nnue/README.md](nnue/README.md), "The two network shapes".
 
 **Feature index.** A piece's row is `bank + (colour ^ colour_flip)·384 + (type − 1)·64 + (square ^ square_flip)`,
@@ -537,8 +542,14 @@ meaning other squares would load cleanly and read the wrong weight bank. `stamp_
 build's constants, so a net stamped by a tool built at another architecture carries that architecture's header and is
 then refused - the header, never the file name, says what a net is.
 
-The shipped net, v12, was trained on about 6 billion public positions; its lineage and the experiments behind it are
-in the C++ repository.
+The shipped net, **v20** (release 2.0.0), is trained **entirely on Leela Chess Zero self-play data**. It measured
+**+9.99 Elo at 8+0.08** over 8,000 games and **+1.13 at 12+0.12** over 12,000 games against v12, the net it replaces.
+
+Pawnstar networks up to and including **v12** were trained on self-play data generated by
+**PlentyChess**, by Yoshie2000 — approximately 6 billion positions. That data is no longer used. The attribution
+is kept deliberately, in [nnue/README.md](nnue/README.md): those networks were measurably stronger for having been
+trained on that data, and the record should show where they came from. The nets' full lineage and the experiments
+behind them are in the C++ repository.
 
 ### Opening book
 
@@ -761,7 +772,7 @@ pawnstar-rs is free software, licensed under the **GNU General Public License, v
 redistribute and/or modify it under the terms of that license; it comes with **no warranty**. See the
 [LICENSE](LICENSE) file for the full text, or <https://www.gnu.org/licenses/gpl-3.0.html>.
 
-The NNUE network ([nnue/pawnstar-v12.bin](nnue/pawnstar-v12.bin)) and the opening book
+The NNUE network ([nnue/pawnstar-v20.bin](nnue/pawnstar-v20.bin)) and the opening book
 ([pawnstar.book](pawnstar.book)) are the ones [Pawnstar](https://github.com/reckless-technology/pawnstar)
 ships, under the same license; the book is derived from the public-domain
 [TSCP](https://github.com/terredeciels/TSCP) `book.txt`.

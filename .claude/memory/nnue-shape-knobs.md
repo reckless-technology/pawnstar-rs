@@ -11,6 +11,28 @@ material output heads — landed here behind Cargo features, alongside v12's sha
 only what is specific to this port; the specification is the skill and the reference implementation
 is `../pawnstar` (its PR #38, and its own `.claude/memory/project_shared_nnue_shape.md`).
 
+**2026-10-30: the shared shape is now the DEFAULT, and v12's is the retired one.** Release 2.0.0
+ships `nnue/pawnstar-v20.bin` at the shared shape (trained entirely on Leela Chess Zero self-play
+data; +9.99 Elo at 8+0.08 over 8,000 games and +1.13 at 12+0.12 over 12,000 against v12), and
+`nnue/pawnstar-v12.bin` was deleted from the tree. Read every "defaults off" below as historical.
+Three things changed shape beyond the feature list:
+
+- **`default = ["debugx", "nnue-king-mirroring", "nnue-output-buckets-8"]`**, so
+  `--no-default-features` now drops the *shape* as well as DEBUGX. The retired shape is
+  `--no-default-features --features debugx`; the DEBUGX-free build of the *shipped* shape is
+  `--no-default-features --features nnue-shared-shape`. That overload is the one trap this flip
+  introduced, and it is written down in `Cargo.toml`, `README.md` and `nnue/README.md` because the
+  short form reads like it only means "no DEBUGX".
+- **The bench golden is 5,617,906** at depth 13 single-threaded, replacing 6,601,454. It must be
+  identical in `../pawnstar` and `../pawnstar-go`; the three moved together.
+- **A shape probe must not name a shape.** `nnue_container_test` gated its shipped-net checks on a
+  const `IS_V12_SHAPE`, which inverted the moment the shipped net changed shape: at the retired
+  shape it ran v12's checks against v20's net and failed four of them. It now decodes the header's
+  architecture fields and map digest from the image and compares them with
+  `expected_net_header()` — and deliberately **not** the payload checksums, or a net of this shape
+  that is corrupt would skip quietly instead of failing loudly, which is the one thing that suite
+  exists to catch.
+
 ## The knobs are Cargo features, not an env var
 
 `nnue-king-mirroring` and `nnue-output-buckets-8`, aggregated as `nnue-shared-shape`, standing in
@@ -45,6 +67,10 @@ node-count signature" — and the synthetic net's bytes are identical to the C++
 (SHA-256 `4abfdb7b…8ad4871b`, 12,617,824 bytes), which is itself half the proof. `6,601,454` remains
 the gate for the **default** shape only.
 
+`6,601,454` is history; `5,617,906` is the **default**-shape gate, and the synthetic-net signature
+remains the gate for a build with no trained net of its shape — which, since v12's net was deleted, is
+what the retired shape now always is.
+
 The synthetic-net builder lives in the library (`nnue::synthetic_net_image`) rather than in the test,
 because a Rust integration test cannot share code with a binary: `nnue_incremental_test` and
 `src/bin/write_synthetic_net.rs` both need the same bytes. Its payload is written out by hand, which
@@ -61,5 +87,6 @@ place.
 **The net-dependent suites skip when the shipped net is not this build's shape**, through
 `tests/common::is_net_this_builds_shape`, which is the existing "skip when the net is absent"
 contract (the C++'s exit-0 contract) extended to the shape knobs. The three suites that spawn the
-engine binary skip wholesale, because the binary plays on the *embedded* v12 net and no net exists at
-the new shape for it to embed.
+engine binary skip wholesale, because the binary plays on the *embedded* net — which since 2.0.0 is
+v20, so those three now run at the **default** shape and skip at the retired one, the exact reverse
+of how they were written.

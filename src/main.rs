@@ -13,7 +13,7 @@ use pawnstar::version::version_string;
 
 /// The shipped NNUE net embedded into the binary (the C++ src/embedded_net.S), used as a fallback
 /// when the on-disk net cannot be loaded. Linked into the engine executable only (not the lib/tests).
-static EMBEDDED_NET: &[u8] = include_bytes!("../nnue/pawnstar-v12.bin");
+static EMBEDDED_NET: &[u8] = include_bytes!("../nnue/pawnstar-v20.bin");
 
 /// The shipped opening book embedded into the binary (the C++ src/embedded_book.S), used as a
 /// fallback when the on-disk pawnstar.book cannot be loaded.
@@ -100,7 +100,7 @@ fn main() {
         // plausible Elo for a net that never played a move. The loader has already said which
         // field disagreed; the engine stops.
         let net_path = std::env::var("PAWNSTAR_EVALFILE")
-            .unwrap_or_else(|_| locate_resource("nnue/pawnstar-v12.bin"));
+            .unwrap_or_else(|_| locate_resource("nnue/pawnstar-v20.bin"));
         match game.nnue_network.load(&net_path) {
             NetLoadOutcome::Loaded => {}
             NetLoadOutcome::Refused => {

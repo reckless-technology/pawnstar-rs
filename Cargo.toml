@@ -9,23 +9,34 @@ license = "GPL-3.0-only"
 
 [features]
 # Mirrors the C++ DEBUGX flag: diagnostic counters compiled in by default,
-# disabled for release builds with --no-default-features (the C++ RELEASE=1).
-default = ["debugx"]
+# disabled for release builds with --no-default-features (the C++ RELEASE=1). Note that
+# --no-default-features now drops the NNUE shape features below as well, so a debugx-free build of
+# the shipped shape is `--no-default-features --features nnue-shared-shape`.
+#
+# The NNUE network shape is in `default` too: the shipped net (nnue/pawnstar-v20.bin, release 2.0.0)
+# is the shared architecture, and a default build must be able to load it.
+default = ["debugx", "nnue-king-mirroring", "nnue-output-buckets-8"]
 debugx = []
 
 # The NNUE network shape, mirroring the C++ PAWNSTAR_NNUE_KING_MIRRORING and
-# PAWNSTAR_NNUE_OUTPUT_BUCKETS build knobs, so either shape can be built from one tree while the
-# three bit-exact ports (C++, Rust, Go) are brought across one at a time. The defaults are the v12
-# shape the shipped net was trained for; the shared architecture is both features together:
+# PAWNSTAR_NNUE_OUTPUT_BUCKETS build knobs. **Both are on by default** — the shared architecture
+# every reckless-technology chess engine evaluates with, horizontal king mirroring plus 8 material
+# output heads, which is the shape nnue/pawnstar-v20.bin was trained for. `nnue-shared-shape`
+# aggregates the two and is what `default` amounts to.
 #
-#   cargo test --release --features nnue-shared-shape
+# The retired v12 shape — mirroring off, one output head — still builds, by dropping the defaults:
+#
+#   cargo test --release --no-default-features --features debugx
+#
+# Nothing in the tree is a net of that shape any more (v12's PlentyChess-derived net was removed in
+# release 2.0.0), so the suites that need a trained net skip there and say so, exactly as they skip
+# when the net file is absent. Either feature alone is also buildable, which is how the two were
+# measured separately.
 #
 # Both are stamped into every net's header (`flags` bit 0, `output_buckets`, and the bucket map's
 # CRC-64), and the loader checks all three, so a net can only ever load into a build of its own
-# shape — a new-shape build refuses nnue/pawnstar-v12.bin, which is correct, not a fault. A shape
-# change is also an evaluation change, so it moves the bench signature and breaks parity with the
-# C++ and Go ports until all three are ported together: do not make these default for one engine
-# alone.
+# shape. A shape change is also an evaluation change, so it moves the bench signature and breaks
+# parity with the C++ and Go ports: it lands in all three together or not at all.
 nnue-king-mirroring = []
 nnue-output-buckets-8 = []
 nnue-shared-shape = ["nnue-king-mirroring", "nnue-output-buckets-8"]
