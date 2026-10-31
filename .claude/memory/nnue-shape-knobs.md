@@ -64,8 +64,9 @@ avoid the full rebuild each switch costs.
 weights a depth-13 search barely prunes and does not finish in useful time. The gate is instead
 **six fixed-depth-8 searches over the synthetic net** — `nnue/README.md`, "The new shape's
 node-count signature" — and the synthetic net's bytes are identical to the C++'s
-(SHA-256 `4abfdb7b…8ad4871b`, 12,617,824 bytes), which is itself half the proof. `6,601,454` remains
-the gate for the **default** shape only.
+(SHA-256 `4abfdb7b…8ad4871b`, 12,617,824 bytes), which is itself half the proof. The bench total
+remains the gate for the **default** shape only — and that total is now `5,617,906`, not the
+`6,601,454` this sentence named before the shape flipped.
 
 `6,601,454` is history; `5,617,906` is the **default**-shape gate, and the synthetic-net signature
 remains the gate for a build with no trained net of its shape — which, since v12's net was deleted, is

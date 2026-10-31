@@ -1,7 +1,8 @@
 //! NNUE (efficiently-updatable neural network) evaluation — the engine's only evaluator.
 //! (Port of `nnue.h`.)
 //!
-//! The network is a "perspective" net with bullet's `ChessBuckets` feature set:
+//! The network is a "perspective" net with bullet's `ChessBucketsMirrored` feature set (plain
+//! `ChessBuckets` at the retired v12 shape, mirroring being the difference):
 //!
 //! ```text
 //!   768 inputs per (perspective, king bucket)  ->  HIDDEN_SIZE feature transformer  (x2 perspectives)

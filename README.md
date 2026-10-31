@@ -149,7 +149,7 @@ cargo test --release --test perft_test            # one suite
 bash test/uci_test.sh target/release/pawnstar     # the UCI integration suite on its own (bash >= 4, for coproc)
 ```
 
-`cargo test` covers everything the C++ `make check` runs, plus two gates of its own:
+`cargo test` covers everything the C++ `make check` runs, plus seven gates of its own:
 
 | Suite | What it holds |
 |---|---|
@@ -157,8 +157,9 @@ bash test/uci_test.sh target/release/pawnstar     # the UCI integration suite on
 | `see_test` | 24 static exchange cases. Also checks the fast, make-move-free SEE against the make-move reference over a recursive move tree. |
 | `nnue_test` | The exact int16 forward pass matches the trainer's 250 reference evals within ±2 cp. The int8 output layer stays within 40 cp of it. |
 | `nnue_incremental_test` | The lazily updated accumulator is bit-identical to a full refresh over random move sequences, including king-bucket crossings. |
+| `nnue_container_test` | The shared `RNNUE1` container: CRC-64/XZ against its published check value first, the 64-byte header's layout offset by offset, and every refusal the loader's two checks make - each on stdout and stderr both, each leaving the net already loaded playing, and a refused net never replaced by the embedded one. |
 | `bratko_kopec_nnue_test` | A hard gate: all 24 Bratko-Kopec positions solved at depth 8, single-threaded. |
-| `opening_book_test` | The book's parsing, lookup and `?` (questionable) moves. |
+| `opening_book_test` | The book's parsing, lookup and `?` (questionable) moves. Then the shipped book itself: that it loads, that its header still states the Lichess CC0 provenance it was replaced for and no TSCP claim, that it carries `?` marks at all and distinguishes the engine's own moves from the database's, and that every position it continues from has a move it may actually play. |
 | `chess_clock_test` | Deadlines, elapsed time, `ponderhit` and reset. |
 | `uci_shell_test` | Runs `test/uci_test.sh` against the built engine: handshake, `seldepth`, `searchmoves`, `currmove`, `stop` and `quit` written straight after `go infinite`, malformed `go` values and `bench`. |
 | `uci_robustness_test` | Malformed FENs never panic, `go ponder` never answers before `ponderhit` or `stop`, a `stop` or `quit` written straight after `go infinite` always ends the search, and malformed `go` values are ignored. |
@@ -168,10 +169,11 @@ bash test/uci_test.sh target/release/pawnstar     # the UCI integration suite on
 | `fifty_move_clock_test` | Rust only: castling advances the fifty-move clock and only captures and pawn moves restart it, the FEN after each castling reads back, a castling on the hundredth ply is a draw to the search and the eval, and the repetition scan walks past a castling without a false match. |
 | `generated_data_test` | Rust only: golden values for the Zobrist keys and magic tables, printed by the C++. A unit test in `src/generated_data.rs` runs the tables' `const` generators at run time and holds them to the tables the compiler baked. |
 | `bench_golden_test` | Rust only: the 5,617,906-node `bench` signature, and each position's node count and best move. |
+| `version_test` | Rust only: the version `build.rs` stamps is `MAJOR.MINOR.BUILD`, three decimal numbers, as the release workflow and the `id name` line expect. |
 
-The NNUE-dependent suites skip (and pass) when `nnue/pawnstar-v20.bin` is absent, as the C++ suites exit 0 without
-it. Shipping a new net follows the C++ checklist (`../pawnstar/nnue/README.md` §7), plus re-blessing the golden test
-here.
+The NNUE-dependent suites skip (and pass) when `nnue/pawnstar-v20.bin` is absent **or is not this build's NNUE
+shape**, as the C++ suites exit 0 without it. Shipping a new net follows the C++ checklist
+(`../pawnstar/nnue/README.md` §7), plus re-blessing the golden test here.
 
 ### Coverage
 
@@ -546,7 +548,7 @@ en passant checks alike. The `see_test` suite holds it to the make-move referenc
 ### NNUE
 
 [src/nnue.rs](src/nnue.rs) is the engine's only evaluator, a port of the C++ network. It is a perspective net with
-bullet's `ChessBuckets` features:
+bullet's `ChessBucketsMirrored` features (`ChessBuckets` at the retired v12 shape, mirroring being the difference):
 
 ```
 768 inputs per (perspective, king bucket)  →  1024 feature transformer, shared by both perspectives
@@ -597,9 +599,10 @@ of the whole `Perspective`, which cannot miss either case. The `i16` arithmetic 
 - it is multiplied by the output weights, requantised to `i8` at load;
 - the products are summed in `i32`, which provably cannot overflow and lets LLVM vectorise the loop.
 
-The result is bit-identical to the C++ scalar, AVX2 and AVX-VNNI kernels, and within a bounded 40 cp (measured 26) of
-the exact int16 forward pass, `evaluate_exact`. The exact pass is kept as the reference that `nnue_test` holds to the
-trainer's evals.
+The result is bit-identical to the C++ scalar, AVX2 and AVX-VNNI kernels, and within a bounded 40 cp (which is
+exactly what v20's 250 reference positions measure, 2026-10-30; it was 26 on v12, and the rise is the one int8 scale
+shared across eight output heads, not drift) of the exact int16 forward pass, `evaluate_exact`. The exact pass is
+kept as the reference that `nnue_test` holds to the trainer's evals.
 
 **The net file** is in the shared Reckless NNUE container, `RNNUE1`: the 64-byte self-describing header every
 reckless-technology chess engine reads, then the weight payload. The header records the architecture - the features
@@ -648,17 +651,22 @@ behind them are in the C++ repository.
 
 ### Opening book
 
-[src/opening_book.rs](src/opening_book.rs) reads `pawnstar.book`: 3,244 lines in coordinate notation, built from the
-[Lichess open database](https://database.lichess.org/) and so carrying no third party's restriction
-([THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)). The book file's own `#` header records the monthly export it came
+[src/opening_book.rs](src/opening_book.rs) reads `pawnstar.book`: 3,328 lines in coordinate notation, 3,244 of them
+built from the [Lichess open database](https://database.lichess.org/) and so carrying no third party's restriction
+([THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)); the other 84 end in a move this engine chose itself, as the
+file says of them. The book file's own `#` header records the monthly export it came
 from, every filter used, the counts and the SHA-256 of exactly the bytes read. Each line is replayed from the start
 position, and the book maps each position's Zobrist hash to the moves played from it, repeats included, so a uniform
 random pick is weighted by frequency. No line is a prefix of another and each appears exactly once, so a move's
 weight is the number of book lines passing through it, not a game count.
 
 A move written with a trailing `?` is *questionable*. It is replayed so the rest of its line still parses, but it is
-never chosen; the shipped book contains none, the format being kept for a hand-written book. `bookmoves` lists a position's moves and their counts. The book is consulted only when `OwnBook` is on
-and `go searchmoves` is not restricting the root.
+never chosen. The shipped book has been through `tools/filter_book` in the C++ repository, which marks every move
+scoring more than 100 cp below its position's best as that engine's own NNUE measures it at depth 12, so the engine
+answers a move it would not play itself and never offers it. Where every move a position had is marked, that pass
+added the engine's own choice there unmarked - the 84 lines above - so no position the book continues from is left
+with nothing to play. `bookmoves` lists a position's moves and their counts. The book is consulted only when
+`OwnBook` is on and `go searchmoves` is not restricting the root.
 
 ### UCI protocol
 
@@ -712,22 +720,29 @@ empty.
 
 ## Continuous integration
 
-`.github/workflows/ci.yml` gates every push and pull request to `main` with four jobs:
+`.github/workflows/ci.yml` gates every push and pull request to `main` with six jobs:
 
 - **build-test** runs `cargo build/test --release` and checks the bench determinism signature.
 - **coverage** runs every suite under `cargo llvm-cov --release` and fails under 90 % of lines, `src/bin/` left out
   (see [Coverage](#coverage)). It builds the pinned cargo-llvm-cov from crates.io and keeps its binary in the Actions
   cache under that version, so it is built again only when the pin moves.
 - **format** runs `cargo fmt --check`.
+- **retired v12 NNUE shape (no mirroring, one output head)** builds and tests
+  `--no-default-features --features debugx` in a target directory of its own, since every job above exercises the
+  default shape and a gated path with no CI rots silently. The suites whose expected values need a trained net of
+  that shape skip there, no such net being in the tree any more.
+- **cross-port node-count signature (synthetic net)** writes the synthetic net at this build's shape and runs
+  `tools/new-shape-signature.sh --hash 64 --depth 8` over it. It is the one node-count gate independent of which net
+  is shipped, and the six expected results live in that script and nowhere else.
 - **build + test (windows x86_64)** runs the same build and suites on Windows (MSVC). Checking the bench signature on
   a second platform makes it a cross-platform parity guarantee rather than a Linux-only one.
 
 The signature the workflow checks is derived from `GOLDEN_TOTAL` in `tests/bench_golden_test.rs`, so the number has
 one home.
 
-**Every job runs on a GitHub-hosted image**, named by its version rather than `-latest`: `ubuntu-24.04` for the first
-three and `windows-2025` for the Windows one. The images are free for a public repository, and each starts empty, so
-every job installs what it needs: `dtolnay/rust-toolchain` brings the stable toolchain `rust-toolchain.toml` names
+**Every job runs on a GitHub-hosted image**, named by its version rather than `-latest`: `ubuntu-24.04` for the
+first five and `windows-2025` for the Windows one. The images are free for a public repository, and each starts
+empty, so every job installs what it needs: `dtolnay/rust-toolchain` brings the stable toolchain `rust-toolchain.toml` names
 (with `llvm-tools` for coverage and `rustfmt` for the format check), and the Windows image carries Visual Studio's C++
 build tools for the MSVC linker. The Windows job's shell is Git Bash 5.x, which satisfies the "bash >= 4 with coproc"
 probe in `tests/uci_shell_test.rs`, so `test/uci_test.sh` really runs there rather than skipping.

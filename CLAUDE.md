@@ -57,8 +57,10 @@ suites with `--release`. Env knobs (same as C++): `PAWNSTAR_THREADS` (thread-cou
 per-position best move / node count / DEBUGX counters). Test-only: `PAWNSTAR_PERFT_DEPTH`,
 `PAWNSTAR_BK_DEPTH`.
 
-CI runs the same gates on **Linux and Windows** (`.github/workflows/ci.yml`): `cargo build/test
---release`, `cargo fmt --check`, and the bench determinism signature on both. The signature is derived
+CI runs the same gates on **Linux and Windows** (`.github/workflows/ci.yml`, six jobs): `cargo build/test
+--release`, `cargo fmt --check`, and the bench determinism signature on both, plus coverage, a
+`v12-shape` job that builds and tests the retired shape no other job exercises, and a `shape-signature` job
+running `tools/new-shape-signature.sh` over the synthetic net. The signature is derived
 from `GOLDEN_TOTAL` in `tests/bench_golden_test.rs` — never write a second copy of the number into a
 workflow; that drift once kept CI red for three commits in the sibling repo. Every job, in CI and in the
 release, runs on a GitHub-hosted image named by its version (`ubuntu-24.04`, `windows-2025`, `macos-15`), free for a
@@ -75,7 +77,7 @@ config's flags, so no workflow sets one.
 
 **Coverage** (README, "Coverage"): CI's `coverage` job runs every suite under `cargo llvm-cov --release` and fails
 under **90 % of lines**. The figure is the engine library and the `pawnstar` binary - `src/` without `src/bin/`:
-`dump_magics` and `stamp_net` are developer tools run by hand and are deliberately excluded
+`dump_magics`, `stamp_net` and `write_synthetic_net` are developer tools run by hand and are deliberately excluded
 (`--ignore-filename-regex 'src/bin/'`). The binary suites (`uci_shell_test`, `uci_robustness_test`,
 `uci_binary_test`) count because the binary they spawn is the instrumented one and inherits `LLVM_PROFILE_FILE`; a
 spawned engine must therefore end by returning from `main` (end of input or `quit`) or exiting within the suite's
@@ -98,13 +100,16 @@ only, no engine state, checked by `uci_binary_test`), because a release binary t
 file, `README.md`, `nnue/README.md` and that command must agree. The crate has **no** third-party code
 dependencies, and nothing here is adapted from bullet - that is the C++ repo's notice, not this one's.
 **The opening book `pawnstar.book` was built from the Lichess open database (CC0 1.0)** - the bytes are
-the C++ repo's, copied in on 2026-10-30, and are not reproducible by regenerating them (the file's `#`
+the C++ repo's, the screened book copied in on 2026-10-31 (3,328 lines, 84 of them ending in a move this
+engine chose where `filter_book` had marked every database move at that position), and are not
+reproducible by regenerating them (the file's `#`
 header carries a generation timestamp), so a change arrives as bytes from `../pawnstar` and never from a
 generator here. CC0 waives attribution, so every place that credits Lichess says plainly that nothing
 requires it. It replaced a 385-line book derived from TSCP's `book.txt` which this repo asserted was
 public domain: TSCP is Copyright 1997 Tom Kerrigan under an informal non-commercial permission, so the
 claim was false and no wording could have fixed it. `tests/opening_book_test.rs` pins the shipped file's
-provenance header and its width, and `tests/uci_binary_test.rs` pins the printed notice - including that
+provenance header, its width, that it carries `?` marks at all, that it says which moves are the engine's
+own, and that every position a line continues from has a selectable move; and `tests/uci_binary_test.rs` pins the printed notice - including that
 "TSCP" and "Kerrigan" appear nowhere in it.
 Releases publish **no source archive** (Jonny, 2026-10-30: clone or fork for the source).
 

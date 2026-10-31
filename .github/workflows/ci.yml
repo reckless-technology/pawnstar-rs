@@ -1,7 +1,9 @@
 # CI mirrors the C++ repo's gates: a build-and-test job (all suites, including the bench golden
 # that locks bit-exact parity with the C++ engine, and the uci_test.sh shell suite), a coverage
 # job (90 % of lines, src/bin/ excepted) and a format job (the whole tree must stay
-# cargo-fmt-clean, like the C++ clang-format gate).
+# cargo-fmt-clean, like the C++ clang-format gate). Three more, each documented above its own job
+# below: the retired v12 NNUE shape, which no other job builds; the cross-port node-count
+# signature over the synthetic net; and the same build and suites on Windows.
 #
 # Every job runs on a GitHub-hosted image named by its version (ubuntu-24.04, windows-2025),
 # which starts empty each time: dtolnay/rust-toolchain brings the stable toolchain that
@@ -45,8 +47,8 @@ jobs:
   # Line coverage of the engine library and the pawnstar binary, gated at 90 %. Every suite runs
   # instrumented, the UCI shell suite and the binary suites included: the binary they spawn is the
   # instrumented one (CARGO_BIN_EXE_pawnstar), and it inherits cargo-llvm-cov's LLVM_PROFILE_FILE,
-  # so main.rs and the UCI handlers count. src/bin/ is left out: dump_magics and stamp_net are
-  # developer tools run by hand, not the engine. cargo-llvm-cov is built from crates.io at its
+  # so main.rs and the UCI handlers count. src/bin/ is left out: dump_magics, stamp_net and
+  # write_synthetic_net are developer tools run by hand, not the engine. cargo-llvm-cov is built from crates.io at its
   # pinned version and its binary cached under that version, so a run builds it only when the pin moves.
   coverage:
     runs-on: ubuntu-24.04
