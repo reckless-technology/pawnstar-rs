@@ -9,6 +9,13 @@ The crate has **no third-party code dependencies at all**: `Cargo.toml` declares
 anyone else. Everything below is about **data** shipped in this repository and in its release
 binaries.
 
+One thing below carries a notice this engine owes, and one does not. The shipped network was trained
+entirely on a database published under the **Open Database License**, which obliges a notice naming
+the source wherever a work trained on it is distributed: that is the first section. The shipped
+**opening book** was built from the Lichess open database, which is released under a **CC0
+public-domain dedication** — and **CC0 waives the attribution requirement**, so that section is not a
+notice this engine owes; it is there because saying where the data came from is the right thing to do.
+
 ## The NNUE network's training data — Leela Chess Zero (ODbL 1.0 / DbCL 1.0)
 
 The shipped evaluation network [`nnue/pawnstar-v20.bin`](nnue/pawnstar-v20.bin) — the same blob the
@@ -55,12 +62,38 @@ lives), one per run, reproduced here verbatim.
   and places them in the public domain as far as the publisher is able. Nothing further is owed for
   them beyond the notice above.
 
-## The opening book — TSCP (public domain)
+## The opening book — the Lichess open database (CC0 1.0)
 
-[`pawnstar.book`](pawnstar.book), read by `src/opening_book.rs` and embedded in the engine binary, is
-derived from the **public-domain** `book.txt` of **TSCP** (<https://github.com/terredeciels/TSCP>),
-reformatted into coordinate notation. Public-domain material obliges no notice; the credit is
-recorded because the record should show where the lines came from.
+[`pawnstar.book`](pawnstar.book), read by `src/opening_book.rs` and embedded in the engine binary, was
+**built from the Lichess open database** — specifically the monthly export of standard rated games
+named in the book file's own header, which also records the filters used, the counts and the SHA-256
+of exactly the bytes read. It is the same file the C++
+[pawnstar](https://github.com/reckless-technology/pawnstar) and
+[pawnstar-go](https://github.com/reckless-technology/pawnstar-go) engines ship, byte for byte;
+`tools/make_book.cpp` in the C++ repository built it, and it is not reproducible by regenerating it
+(the header carries a generation timestamp), so it travels between the ports as bytes.
+
+- **Source:** Lichess open database, standard rated games, <https://database.lichess.org/>
+- **Dedication:** Creative Commons CC0 1.0 Universal (`CC0-1.0`),
+  <https://creativecommons.org/publicdomain/zero/1.0/>
+
+**This section is a courtesy, not an obligation, and it should not be read as one.** CC0 is a
+dedication of the work to the public domain so far as the law allows, and it explicitly waives
+attribution: whoever uses the data owes Lichess nothing, this project included. Saying where a book's
+lines came from is simply how a provenance claim is made checkable, and Lichess made the database
+freely available, so the credit is given because it is right. Nobody downstream of this engine
+inherits a condition from this section — there is none to inherit, and the book carries no third
+party's restriction.
+
+That matters here for a reason worth recording. **The book this replaced did not have a licence
+anybody could point to.** It was derived from TSCP's `book.txt` and was described throughout all three
+ports as public domain; TSCP is Copyright 1997 Tom Kerrigan, and the only permission ever located for
+it was an informal 2002 email allowing use "as long as you're not making any money off of it" — a
+non-commercial permission, which is incompatible with the GPLv3 this engine is distributed under, and
+not a public-domain dedication at all. The material was removed rather than re-worded, because no
+wording could have made the claim true. CC0 was chosen for the replacement precisely because it is a
+dedication the rights holder actually made, so "this book carries no restriction" is now a statement
+that can be checked rather than believed.
 
 ## Withdrawn: the PlentyChess self-play data
 
