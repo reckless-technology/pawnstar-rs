@@ -18,14 +18,18 @@ actually made, so "this book carries no third party's restriction" is checkable 
 ## The rules that are easy to break here
 
 - **The three ports' books are byte-identical by design, and this port copies the bytes.** The
-  generator is `tools/make_book.cpp` in `../pawnstar`; there is **none here and none should be
+  generator is `tools/make_book.cpp` in `../pawnstar`, and `tools/filter_book` there screens what it
+  produces against that engine's own evaluation; there is **neither here and neither should be
   added**. Take a new book with
   `git -C ../pawnstar show origin/main:pawnstar.book > pawnstar.book`.
 - **Never "regenerate" it to check it.** The file's `#` header carries a generation timestamp, so a
   second run of the generator produces a different file and silently breaks the cross-port identity.
   The identity is checked by hashing: the shipped book is sha256
-  `154228ffc843dc8068b6d0da2ff7df9daa39442e923d1eb6a82fc93ca448bcae`, 3,244 opening lines,
-  155,503 bytes, LF.
+  `5f42b523bb68b011be8989218888c4ddb767c9f89c35100cc68b9115c09e9a19`, 3,328 opening lines,
+  162,286 bytes, LF - the screened book taken on 2026-10-31 (`pawnstar` `a7a9198`, here `ae476ee`),
+  which is `../pawnstar/pawnstar.book` and `../pawnstar-go/engine/book.txt` blob for blob. It
+  replaced the unscreened 3,244-line, 155,503-byte book
+  (`154228ffc843dc8068b6d0da2ff7df9daa39442e923d1eb6a82fc93ca448bcae`) of the day before.
 - **`.gitattributes` marks `pawnstar.book` `-text`, and that line is load-bearing.** This clone is
   `core.autocrlf=true`; without `-text` a Windows checkout would embed a CRLF book where Linux and
   macOS embed LF, so the same commit would build two different binaries.
@@ -43,6 +47,10 @@ actually made, so "this book carries no third party's restriction" is checkable 
   "CC0 waives attribution", and contains **neither** "TSCP" nor "Kerrigan".
 - `tests/opening_book_test.rs` - the shipped **file** is loaded and checked for the same three
   things, plus `lines > 385`: a book truncated to its header would load fine and play nothing, and
-  only the start-position check would have caught it.
+  only the start-position check would have caught it. Since 2026-10-31 it also pins that the file
+  carries `?` marks at all (so regenerating with `make_book` and forgetting `filter_book` is
+  caught), that it says which moves are the engine's own and not the database's, and that every
+  position a line continues from has a move that is actually selectable - the invariant the 84
+  engine-chosen lines exist to guarantee.
 - The bench signature is untouched by any of this - `bench` forces `OwnBook` off - so a changed
   bench after a book change means something unrelated broke, not the book. It stayed 5,617,906.

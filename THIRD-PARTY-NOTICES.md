@@ -70,8 +70,14 @@ named in the book file's own header, which also records the filters used, the co
 of exactly the bytes read. It is the same file the C++
 [pawnstar](https://github.com/reckless-technology/pawnstar) and
 [pawnstar-go](https://github.com/reckless-technology/pawnstar-go) engines ship, byte for byte;
-`tools/make_book.cpp` in the C++ repository built it, and it is not reproducible by regenerating it
+`tools/make_book.cpp` in the C++ repository built it and `tools/filter_book` there screened it against that
+engine's own evaluation, and it is not reproducible by regenerating it
 (the header carries a generation timestamp), so it travels between the ports as bytes.
+
+84 of its 3,328 lines end in a move **this engine chose**, not one the database played: the screening marks a move
+it evaluates as far enough below the position's best, and where that left a position with nothing selectable the
+engine's own choice was added there. The file says so of them, and this section's CC0 statement is about the
+database's lines — those 84 are the project's own and carry nothing either.
 
 - **Source:** Lichess open database, standard rated games, <https://database.lichess.org/>
 - **Dedication:** Creative Commons CC0 1.0 Universal (`CC0-1.0`),

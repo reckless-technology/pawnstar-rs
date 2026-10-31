@@ -144,10 +144,11 @@ every platform and in every port (SHA-256
 file the C++ engine's `test_nnue_incremental --write-synthetic-net` writes).
 
 [`tools/new-shape-signature.sh`](../tools/new-shape-signature.sh) is that gate, and it is **committed
-byte-identical in `pawnstar`, `pawnstar-rs` and `pawnstar-go`**: the six expected results live in it and
-nowhere else, so `diff` between the three repositories is the whole audit and there is no second copy of
+byte-identical in `pawnstar`, `pawnstar-rs` and `pawnstar-go`, and a fourth time in `nnue-training` as
+`pipeline/new-shape-signature.sh`** (blob `46aad8fe29e64d937e63851a8afba284abc6c7a2`): the six expected
+results live in it and nowhere else, so `diff` between the four copies is the whole audit and there is no second copy of
 the numbers to drift — this file used to hold one, and a second copy of this repository's *bench* golden
-once sat in CI and silently went stale for three commits. The `new-shape` CI job runs it on every pull
+once sat in CI and silently went stale for three commits. The `shape-signature` CI job runs it on every pull
 request.
 
 ```bash
@@ -156,10 +157,9 @@ target/release/write_synthetic_net synthetic-net.bin
 tools/new-shape-signature.sh --hash 64 --net synthetic-net.bin --depth 8 target/release/pawnstar
 ```
 
-The script's own header still says the shape lives behind a switch that defaults off. That was true
-when it was written and is not any more — but the file is **byte-identical in all three
-repositories on purpose**, so correcting the wording there is a change made in all three at once or
-in none, and it is not made here.
+The script's own header used to say the shape lives behind a switch that defaults off, which stopped
+being true at release 2.0.0. It was corrected on 2026-10-30 — in all **four** copies at once, which is
+the only way that file may ever be changed, its byte-identity being what the audit consists of.
 
 It asserts the net's size, SHA-256 and RNNUE1 header — including `format_version` 2, `payload_bytes`
 12,617,760 and `king_bucket_map_crc` `0x0A20060D4E9586E0` — **before** searching it, so a drifted
