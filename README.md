@@ -11,7 +11,7 @@ the C++ engine: `bench` = **5,617,906 nodes** at depth 13 (net v20; it was 6,601
 every DEBUGX diagnostic counter are byte-identical to the C++ reference. This was checked by diffing transcripts at
 depths 8 to 13, and `tests/bench_golden_test.rs` locks it in.
 
-## Build and run
+## Build
 
 **Setting up a machine.** `tools/setup-dev.ps1` (Windows) and `tools/setup-dev.sh` (Linux, macOS) install what
 building, testing, debugging and coverage need - rustup with the stable toolchain, rustfmt, clippy and llvm-tools,
@@ -22,13 +22,7 @@ and `check environment` tasks.
 
 ```bash
 cargo build --release          # engine → target/release/pawnstar (net + book embedded)
-./target/release/pawnstar      # interactive UCI session
 ```
-
-Point any UCI GUI (Arena, Cute Chess, etc.) at the binary; it needs no configuration. The engine loads
-`nnue/pawnstar-v20.bin` and `pawnstar.book` from the working directory, or from the executable's directory or its
-parent. If neither file can be read, it falls back to the copies embedded in the binary (`include_bytes!`, the C++
-`.incbin`), so the executable is self-contained.
 
 The `dev` profile builds at opt-level 3 **with overflow checks on**. Every intended wrap is spelled `wrapping_*`, so
 an overflow panic in a dev build means a porting bug. The `release` profile matches the C++ semantics. Diagnostic
@@ -44,6 +38,69 @@ cargo run --release --example nnue_dump < fens.txt               # raw evals for
 cargo doc --open                                                 # API documentation (the C++ `make doc`)
 ```
 
+## Usage
+
+Run as a UCI engine (connect via Arena, Cute Chess, or any UCI-compatible GUI):
+
+```bash
+./target/release/pawnstar      # interactive UCI session
+```
+
+Point any UCI GUI at the binary; it needs no configuration and nothing has to be installed beside it. The engine
+prints its banner and version, loads the opening book and the net, and then reads UCI commands from stdin, one per
+line, until end of input or `quit`.
+
+In addition to the standard UCI commands, these engine-specific commands are available at the prompt. `help` lists
+every command, and [UCI protocol](#uci-protocol) below is the full table, standard commands included.
+
+```
+eval        the full evaluation the search uses for the current position
+nnue        the raw NNUE network output for the current position
+getboard    the FEN of the current position
+bookmoves   the opening-book moves for the current position, with their weights
+freebook    release the opening book from memory
+dbg         print the DEBUGX diagnostic counters
+dbgclear    reset them
+bench       search the fixed position set to a fixed depth; print the node total and nps
+license     the engine's licence and the third-party notices the shipped net and book oblige
+help        list every command
+```
+
+`eval` and `nnue` are **not** duplicates. `eval` is the value the search actually uses: the draw short-circuit (0
+for a material, fifty-move or repetition draw), then the eval cache, then the network, then fifty-move scaling,
+which fades the score towards 0 as the fifty-move clock climbs past 20 plies ([Evaluation](#evaluation) below).
+`nnue` is the **bare** network output with none of that wrapping. They agree in a plain position and diverge on a
+draw or once the fifty-move clock is high.
+
+### UCI options
+
+Pawnstar advertises these `setoption` options in its `uci` response. Being a mechanical port, it advertises the
+same names, types, ranges and defaults as the C++ and Go engines; `tests/uci_binary_test.rs` pins the advertised
+`Hash` line verbatim, and `tests/uci_commands_test.rs` exercises every option's effect, its clamping and a
+malformed value. [UCI protocol](#uci-protocol) below repeats this table beside the commands.
+
+- **`Hash`** (spin, default 64, 1–4096 MB) — transposition-table size, reallocated and cleared at runtime
+  (`setoption name Hash value <MB>`). The default must stay equal to the other two ports': table size changes the
+  collision pattern and so the node count at a fixed depth, so an unequal default breaks the three ports'
+  bit-exactness at every `go` — and invisibly, since `bench` pins 64 in all three.
+- **`Clear Hash`** (button) — empties the transposition table without resizing it.
+- **`Threads`** (spin, default = `PAWNSTAR_THREADS` or all cores, 1–256) — number of Lazy SMP search threads. `1`
+  gives the deterministic single-threaded search the parity gate compares.
+- **`Move Overhead`** (spin, default 30, 0–5000 ms) — time held back from every hard deadline to cover GUI and
+  network lag, so the engine doesn't forfeit on time.
+- **`OwnBook`** (check, default true) — whether to play from the opening book; set false to let the GUI's book
+  drive the opening. The book is consulted only when this is on and `go searchmoves` is not restricting the root.
+- **`EvalFile`** (string, default empty — the shipped net) — path to an `RNNUE1` net to load at runtime
+  (`setoption name EvalFile value /path/to/net.bin`), which clears the eval cache since the cached scores belong to
+  the previous net. **A net this refuses is not substituted for the one already playing:** the net loaded before the
+  command stays in play, and which net that is goes out on stdout *and* stderr, naming it — a harness that set
+  `EvalFile`, saw `readyok` and ran a thousand games would otherwise credit the result to a net that never played a
+  move, and `info` lines are exactly what a harness drops.
+- **`Ponder`** (check, default false) — advertised so GUIs know the engine can ponder. Its value is declarative
+  only; pondering itself is driven by `go ponder` and `ponderhit`.
+
+A numeric option given a value that is not an integer is left as it was, rather than clamped or zeroed.
+
 Environment variables, the same as the C++ engine's:
 
 | Variable | Effect |
@@ -53,6 +110,36 @@ Environment variables, the same as the C++ engine's:
 | `PAWNSTAR_BENCH_DEBUG=1` | Makes `bench` print each position's best move, node count and DEBUGX counters, for cross-engine comparison. |
 | `PAWNSTAR_PERFT_DEPTH` | Test only: caps the perft depth for quick iteration. |
 | `PAWNSTAR_BK_DEPTH` | Test only: overrides the Bratko-Kopec search depth. |
+
+### The NNUE net and the opening book
+
+NNUE is the **only** evaluator — there is no hand-written fallback evaluation — so a net is always needed. The
+engine looks for `nnue/pawnstar-v20.bin` and `pawnstar.book` relative to the working directory first, then
+relative to the executable's own directory and that directory's parent, so it finds both whichever of the three a
+GUI launches it from. If a file is not found at all it falls back to the copy compiled into the binary
+(`include_bytes!`, the C++ `.incbin`), so the executable is self-contained: a lone `pawnstar` plays with the
+shipped net and book and no files beside it.
+
+The two failures are **not** treated alike. A net that is simply missing falls back to the embedded copy and says
+so on an `info string`. A net that is *there* and is **refused** by one of the container's integrity checks is
+fatal at startup — the loader has already named the field that disagreed, and the engine exits non-zero rather
+than quietly substitute different weights and play a whole match on a net nobody asked for. The book is optional,
+so losing both the file and the embedded copy is only a warning.
+
+To use a different net:
+
+```
+setoption name EvalFile value /path/to/net.bin      # load a different net at runtime
+```
+
+or at launch:
+
+```bash
+PAWNSTAR_EVALFILE=/path/to/net.bin ./target/release/pawnstar
+```
+
+Either way the net must be an `RNNUE1` container of **this build's NNUE shape** — see
+[NNUE](#nnue) below and [nnue/README.md](nnue/README.md).
 
 ## Testing
 
