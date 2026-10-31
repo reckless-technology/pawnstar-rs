@@ -97,6 +97,15 @@ form on the **`license`** UCI command (`handle_license`/`LICENSE_NOTICE` in `src
 only, no engine state, checked by `uci_binary_test`), because a release binary travels without the tree. The
 file, `README.md`, `nnue/README.md` and that command must agree. The crate has **no** third-party code
 dependencies, and nothing here is adapted from bullet - that is the C++ repo's notice, not this one's.
+**The opening book `pawnstar.book` was built from the Lichess open database (CC0 1.0)** - the bytes are
+the C++ repo's, copied in on 2026-10-30, and are not reproducible by regenerating them (the file's `#`
+header carries a generation timestamp), so a change arrives as bytes from `../pawnstar` and never from a
+generator here. CC0 waives attribution, so every place that credits Lichess says plainly that nothing
+requires it. It replaced a 385-line book derived from TSCP's `book.txt` which this repo asserted was
+public domain: TSCP is Copyright 1997 Tom Kerrigan under an informal non-commercial permission, so the
+claim was false and no wording could have fixed it. `tests/opening_book_test.rs` pins the shipped file's
+provenance header and its width, and `tests/uci_binary_test.rs` pins the printed notice - including that
+"TSCP" and "Kerrigan" appear nowhere in it.
 Releases publish **no source archive** (Jonny, 2026-10-30: clone or fork for the source).
 
 ## The parity contract (the one hard rule)

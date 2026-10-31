@@ -561,12 +561,16 @@ behind them are in the C++ repository.
 
 ### Opening book
 
-[src/opening_book.rs](src/opening_book.rs) reads `pawnstar.book`: 385 lines in coordinate notation, derived from the
-public-domain TSCP `book.txt` ([THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)). Each line is replayed from the start position, and the book maps each position's
-Zobrist hash to the moves played from it, repeats included, so a uniform random pick is weighted by frequency.
+[src/opening_book.rs](src/opening_book.rs) reads `pawnstar.book`: 3,244 lines in coordinate notation, built from the
+[Lichess open database](https://database.lichess.org/) and so carrying no third party's restriction
+([THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)). The book file's own `#` header records the monthly export it came
+from, every filter used, the counts and the SHA-256 of exactly the bytes read. Each line is replayed from the start
+position, and the book maps each position's Zobrist hash to the moves played from it, repeats included, so a uniform
+random pick is weighted by frequency. No line is a prefix of another and each appears exactly once, so a move's
+weight is the number of book lines passing through it, not a game count.
 
 A move written with a trailing `?` is *questionable*. It is replayed so the rest of its line still parses, but it is
-never chosen. `bookmoves` lists a position's moves and their counts. The book is consulted only when `OwnBook` is on
+never chosen; the shipped book contains none, the format being kept for a hand-written book. `bookmoves` lists a position's moves and their counts. The book is consulted only when `OwnBook` is on
 and `go searchmoves` is not restricting the root.
 
 ### UCI protocol
@@ -783,8 +787,11 @@ redistribute and/or modify it under the terms of that license; it comes with **n
 
 The NNUE network ([nnue/pawnstar-v20.bin](nnue/pawnstar-v20.bin)) and the opening book
 ([pawnstar.book](pawnstar.book)) are the ones [Pawnstar](https://github.com/reckless-technology/pawnstar)
-ships, under the same license; the book is derived from the public-domain
-[TSCP](https://github.com/terredeciels/TSCP) `book.txt`.
+ships, under the same license; the book was built from the [Lichess open database](https://database.lichess.org/),
+which is released under the Creative Commons [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/)
+public-domain dedication. CC0 waives attribution, so the credit in
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) is a courtesy and not an obligation this engine carries - and
+nothing downstream inherits one either.
 
 **[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md)** carries every third-party notice this engine owes - chiefly the
 **ODbL 1.0 / DbCL 1.0** attribution for the Leela Chess Zero self-play training data the shipped net was trained on,

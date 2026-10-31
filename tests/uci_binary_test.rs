@@ -287,10 +287,31 @@ fn test_start_in_repo() {
         "license prints the ODbL/DbCL attribution for the net's training data",
     );
     check(
-        out.contains("GNU General Public License, version 3")
-            && out.contains("public-domain TSCP")
-            && out.contains("Yoshie2000"),
-        "license prints the GPLv3 notice, the book's origin and the withdrawn data's credit",
+        out.contains("GNU General Public License, version 3") && out.contains("Yoshie2000"),
+        "license prints the GPLv3 notice and the withdrawn data's credit",
+    );
+    // The opening book's provenance, which is the one claim in this notice that used to be WRONG: the
+    // book was derived from TSCP's book.txt and called public domain, and TSCP is Copyright 1997 Tom
+    // Kerrigan under an informal non-commercial permission - GPL-incompatible, and not a dedication at
+    // all. The book is now built from the Lichess open database, whose CC0 dedication makes the claim
+    // true. Two things are pinned here and both matter: that the new source and its dedication are
+    // named, and that the old claim is GONE. A notice that still said "TSCP" would be the exact defect
+    // this replaced.
+    check(
+        out.contains("Lichess open database")
+            && out.contains("https://database.lichess.org/")
+            && out.contains("CC0 1.0")
+            && out.contains("https://creativecommons.org/publicdomain/zero/1.0/")
+            && !out.contains("TSCP")
+            && !out.contains("Kerrigan"),
+        "license names the book's Lichess CC0 source, and no longer claims TSCP",
+    );
+    // CC0 asks for no attribution at all, so the notice must not imply that Pawnstar owes one:
+    // overstating an obligation is its own kind of false provenance claim, and this check is what stops
+    // a later edit quietly turning the courtesy back into a duty.
+    check(
+        out.contains("CC0 waives attribution"),
+        "license says plainly that the Lichess credit is owed to nobody",
     );
 }
 

@@ -5,6 +5,10 @@
 //! of the line parses, but must never be returned by get_move. The move that follows it in the
 //! line must still be recorded and selectable. These tests build a tiny book in a temp file and
 //! assert exactly that.
+//!
+//! The suite then checks the **shipped** `pawnstar.book` itself: that it loads, and that its `#`
+//! header still states the provenance it was replaced for - the Lichess open database under CC0 1.0,
+//! credited as the courtesy it is, with no trace of the false TSCP public-domain claim.
 
 mod common;
 
@@ -85,6 +89,63 @@ fn opening_book_suite() {
 
     let _ = std::fs::remove_file(&book_path);
 
-    let failures = common::summary("OPENING BOOK: '?' (questionable) move handling");
+    check_shipped_book_provenance();
+
+    let failures = common::summary("OPENING BOOK: '?' (questionable) move handling and provenance");
     assert_eq!(failures, 0);
+}
+
+/// The shipped book's own provenance header, which is the reason this book exists at all. The book it
+/// replaced was derived from TSCP's `book.txt` and was asserted to be public domain throughout the
+/// three ports; TSCP is Copyright 1997 Tom Kerrigan under an informal non-commercial permission, which
+/// GPLv3 cannot take, so the claim was false and the material had to go. This book is built from the
+/// Lichess open database, whose CC0 1.0 dedication makes the same claim true. Pinned here because a
+/// false provenance claim is exactly the kind of defect that survives a rewrite of the prose around
+/// it: the file itself has to say where it came from, and must not say the old thing. The bytes are
+/// shared with ../pawnstar and ../pawnstar-go, which check the same things.
+fn check_shipped_book_provenance() {
+    let shipped_path = concat!(env!("CARGO_MANIFEST_DIR"), "/pawnstar.book");
+    let shipped = std::fs::read_to_string(shipped_path).expect("read the shipped pawnstar.book");
+
+    // The shipped book loads, which is what the engine does with it at startup.
+    let mut shipped_book = OpeningBook::new();
+    common::check(
+        shipped_book.initialize(shipped_path),
+        "the shipped book parses",
+    );
+    common::check(
+        shipped_book.get_move(hash_after(&[])) != Move::none(),
+        "the shipped book has moves for the start position",
+    );
+
+    common::check(
+        shipped.contains("Lichess open database")
+            && shipped.contains("https://database.lichess.org/")
+            && shipped.contains("CC0 1.0")
+            && shipped.contains("https://creativecommons.org/publicdomain/zero/1.0/"),
+        "the shipped book names its Lichess source and the CC0 dedication",
+    );
+    common::check(
+        !shipped.contains("TSCP") && !shipped.contains("Kerrigan"),
+        "the shipped book makes no claim about TSCP",
+    );
+    // CC0 waives attribution, so the header must not imply an obligation that does not exist -
+    // claiming a duty nobody owes is the mirror image of claiming a permission nobody gave.
+    common::check(
+        shipped.contains("asks for no attribution"),
+        "the shipped book says the Lichess credit is a courtesy, not an obligation",
+    );
+    // Every line below the header parses, which the initialize above already proves - but the parser
+    // stops at the first bad line and reports failure, so count the lines too: a book truncated to its
+    // header would load perfectly and play nothing, and only the start-position check above would catch
+    // it. This pins the width that was the other half of the point: 385 lines replayed each opening
+    // about 13 times in a long match, which inflated every confidence interval the matches produced.
+    let shipped_lines = shipped
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .count();
+    common::check(
+        shipped_lines > 385,
+        "the shipped book is wider than the 385-line book it replaced",
+    );
 }
