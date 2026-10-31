@@ -313,6 +313,14 @@ fn test_start_in_repo() {
         out.contains("CC0 waives attribution"),
         "license says plainly that the Lichess credit is owed to nobody",
     );
+    // Not every line of the book came from the database: screening marks the moves this engine rates far below
+    // its own choice, and where that left a position nothing it would play, its own choice was added there.
+    // Those lines are this project's work, and the notice draws the distinction, so a reader checking the book
+    // against the CC0 paragraph does not have to discover it from the book file.
+    check(
+        out.contains("Eighty-four of the book's 3,328 lines"),
+        "license distinguishes the lines the engine chose from the database's own",
+    );
 }
 
 /// PAWNSTAR_EVALFILE naming a missing file: the engine says so and plays on the embedded net.
