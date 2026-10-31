@@ -148,4 +148,50 @@ fn check_shipped_book_provenance() {
         shipped_lines > 385,
         "the shipped book is wider than the 385-line book it replaced",
     );
+
+    // The book has been through `tools/filter_book`, which lives in ../pawnstar because it needs the
+    // engine's own evaluation: a move scoring far enough below its position's best carries a '?', which
+    // the parser replays but never selects. Pinned for the same reason as the line count above - an
+    // unfiltered book loads perfectly and plays every move the database offered, including the ones this
+    // engine evaluates as losing a pawn, and nothing else here would notice. Regenerating means make_book
+    // THEN filter_book, and this is what catches forgetting the second step.
+    common::check(
+        shipped.contains('?'),
+        "the shipped book carries questionable-move marks",
+    );
+    // Where every move a position had is marked, filter_book adds the engine's own choice there, unmarked.
+    // Those are the only moves in the file that are not the database's, so the file has to say so: the
+    // header's CC0 claim is about the database's lines and a reader must not take it to cover these.
+    common::check(
+        shipped.contains("NOT THE DATABASE'S"),
+        "the shipped book distinguishes the engine's own moves from the database's",
+    );
+
+    // And the invariant that addition exists for: no position the book reaches is left with nothing to
+    // play. A marked move is not selectable, so a position whose every move is marked would return
+    // Move::none and drop the engine out of book - silently, and exactly where an opponent had just
+    // played something unusual. Every position a line continues from must offer a selectable move; the
+    // last position of a line is a leaf and is allowed to have none.
+    let mut dead_ends = 0;
+    for line in shipped.lines() {
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let moves: Vec<&str> = line
+            .split('#')
+            .next()
+            .unwrap_or("")
+            .split_whitespace()
+            .map(|token| token.trim_end_matches('?'))
+            .collect();
+        for ply in 1..moves.len() {
+            if shipped_book.get_move(hash_after(&moves[..ply])) == Move::none() {
+                dead_ends += 1;
+            }
+        }
+    }
+    common::check(
+        dead_ends == 0,
+        "every position the shipped book continues from has a move it may actually play",
+    );
 }
