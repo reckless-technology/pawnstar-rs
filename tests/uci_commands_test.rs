@@ -19,6 +19,7 @@ use pawnstar::input_handling::{
     atoi, parse_integer, process_input, saturate_to_i32, BENCH_DEPTH, BENCH_FENS, HANDLERS,
 };
 use pawnstar::moves::Move;
+use pawnstar::position::Position;
 
 const NET: &str = "nnue/pawnstar-v20.bin";
 const BOOK: &str = "pawnstar.book";
@@ -237,6 +238,20 @@ fn test_position() {
     check(
         fen(&engine) == START_FEN,
         "a malformed FEN falls back to the start position",
+    );
+
+    // A right the board cannot support is dropped rather than carried into the search (issue #30):
+    // this FEN out of Leela's test80 archive is a Chess960 game read as standard chess, so it claims
+    // KQ while White's rooks stand on c1 and g1. Carried, the search generated e1c1 once c1 emptied
+    // and make_move moved a rook from an empty a1, which killed the engine on untrusted
+    // `position fen` input.
+    run(
+        &mut engine,
+        "position fen b2rk3/p2p1nr1/1p2n1p1/1Np2p1p/2P2P1P/1P1BP1P1/P4N2/2R1K1R1 w KQ - 1 16",
+    );
+    check(
+        fen(&engine) == "b2rk3/p2p1nr1/1p2n1p1/1Np2p1p/2P2P1P/1P1BP1P1/P4N2/2R1K1R1 w - - 1 16",
+        "position fen <castling rights the board cannot support>: the rights are dropped",
     );
 
     // `position fen` followed straight by `moves`: an empty FEN is the start position.
@@ -750,6 +765,30 @@ fn test_go_searches() {
     );
     run(&mut engine, "stop");
     run(&mut engine, "stop");
+
+    // The FEN of issue #30, searched on the table every search above has warmed, which is how it
+    // died: it claims KQ with White's rooks on c1 and g1, and once the search moved the c1 rook away
+    // the generator emitted e1c1 and make_move moved a rook from an empty a1 - an access violation
+    // at depth 8 on Windows in the C++ engine, a panic here. The rights are dropped at the parse
+    // now, so what this asserts is the protocol's own promise: the search finishes and answers with
+    // a legal move.
+    const ISSUE_30_FEN: &str =
+        "b2rk3/p2p1nr1/1p2n1p1/1Np2p1p/2P2P1P/1P1BP1P1/P4N2/2R1K1R1 w KQ - 1 16";
+    let before = Position::from_string(ISSUE_30_FEN);
+    run(&mut engine, &format!("position fen {ISSUE_30_FEN}"));
+    run(&mut engine, "go depth 8");
+    check(
+        wait_for_move(&engine, 1, 60000),
+        "go depth 8 on a FEN claiming castling rights the board cannot support answers (issue #30)",
+    );
+    let played = fen(&engine);
+    check(
+        before
+            .generate_legal_moves()
+            .iter()
+            .any(|m| before.make_move(*m).to_string() == played),
+        "the move it answers with is one of the position's legal moves (issue #30)",
+    );
 }
 
 /// Every command that stops a search, sent the instant after `go` with no pause, ends it with a

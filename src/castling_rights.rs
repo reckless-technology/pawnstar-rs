@@ -89,6 +89,36 @@ impl CastlingRights {
         self
     }
 
+    /// Drop every right whose king and rook are not on the squares castling with them needs.
+    /// Within a game the rights carry that themselves - `after_move` revokes a right the moment its
+    /// king's or rook's home square is vacated or entered - so this is for a FEN, the one input that
+    /// can assert a right the board cannot support. `Position::from_fen_fields` applies it; see the
+    /// castling block of `Position::gen_moves` for what the generator relies on (issue #30).
+    #[inline(always)]
+    pub fn keep_supported(
+        &mut self,
+        is_white_kingside_supported: bool,
+        is_white_queenside_supported: bool,
+        is_black_kingside_supported: bool,
+        is_black_queenside_supported: bool,
+    ) -> &mut CastlingRights {
+        let mut supported: u8 = 0;
+        if is_white_kingside_supported {
+            supported |= WHITE_KINGSIDE;
+        }
+        if is_white_queenside_supported {
+            supported |= WHITE_QUEENSIDE;
+        }
+        if is_black_kingside_supported {
+            supported |= BLACK_KINGSIDE;
+        }
+        if is_black_queenside_supported {
+            supported |= BLACK_QUEENSIDE;
+        }
+        self.value &= supported;
+        self
+    }
+
     /// Parse the castling field from a FEN string (e.g. "KQkq" or "-").
     pub fn from_fen(fen: &str) -> CastlingRights {
         let mut result: u8 = 0;

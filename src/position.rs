@@ -211,6 +211,11 @@ impl Position {
         // 3) King is not in check
         // 4) Squares between King and Rook are vacant
         // 5) Square King passes through is not attacked by the enemy.
+        // Conditions 1 and 2 are the rights themselves, and nothing here looks for the king and
+        // rook: a right implies they are home, because `CastlingRights::after_move` revokes it the
+        // moment one of their home squares is vacated or entered, and the FEN parse keeps no right
+        // the board cannot support (issue #30 - a FEN claiming KQ with no rook on a1 had `make_move`
+        // move a rook that was not there). Any new way into a `Position` owes that invariant too.
         if DO_ALL_MOVES && !self.is_in_check() {
             if IS_WHITE {
                 if self.castling_rights.may_white_castle_kingside()
@@ -622,6 +627,21 @@ impl Position {
         }
     }
 
+    /// Whether the king and rook a castling right needs are both on their home squares.
+    /// `color` is the castling side, `king_home` that side's king's home square (e1 or e8) and
+    /// `rook_home` the castling rook's home square (a1, h1, a8 or h8).
+    fn is_castling_right_supported(
+        &self,
+        color: Color,
+        king_home: Square,
+        rook_home: Square,
+    ) -> bool {
+        let home_squares = Bitboard::from_square(king_home) | Bitboard::from_square(rook_home);
+        self.squares[king_home.index()] == Piece::King
+            && self.squares[rook_home.index()] == Piece::Rook
+            && (self.colors[color.index()] & home_squares) == home_squares
+    }
+
     /// Whether the position has a king for each side — the minimum for it to be a legal,
     /// representable chess position (see `from_string`).
     pub fn has_both_kings(&self) -> bool {
@@ -677,9 +697,47 @@ impl Position {
             (position.pieces[Piece::King.index()] & position.colors[Color::White.index()]).lsb();
         position.king_location[Color::Black.index()] =
             (position.pieces[Piece::King.index()] & position.colors[Color::Black.index()]).lsb();
-        // Castling rights
+        // Castling rights. This field is untrusted too, and a right the board cannot support is the
+        // one bad input that reached the move generator: it tests the rights, the squares between and
+        // the squares the king crosses, but never looks for the rook, because within a game a right
+        // cannot outlive it (see the castling block of `gen_moves`). A FEN claiming `KQ` with White's
+        // rooks on c1 and g1 - which Leela's classical input format produces for a Chess960 game read
+        // as standard chess, the way issue #30 was found - let the search generate e1c1 once c1
+        // emptied, and `make_move` then moved a rook from a1 that was not there, leaving a1 occupied
+        // by no piece and the search reading a position that cannot exist.
         let castling_rights = fields.next().unwrap_or("-");
-        position.castling_rights = CastlingRights::from_fen(castling_rights);
+        const WHITE_KING_HOME: Square = Square::from_str("E1");
+        const BLACK_KING_HOME: Square = Square::from_str("E8");
+        const WHITE_KINGSIDE_ROOK_HOME: Square = Square::from_str("H1");
+        const WHITE_QUEENSIDE_ROOK_HOME: Square = Square::from_str("A1");
+        const BLACK_KINGSIDE_ROOK_HOME: Square = Square::from_str("H8");
+        const BLACK_QUEENSIDE_ROOK_HOME: Square = Square::from_str("A8");
+        let is_white_kingside_supported = position.is_castling_right_supported(
+            Color::White,
+            WHITE_KING_HOME,
+            WHITE_KINGSIDE_ROOK_HOME,
+        );
+        let is_white_queenside_supported = position.is_castling_right_supported(
+            Color::White,
+            WHITE_KING_HOME,
+            WHITE_QUEENSIDE_ROOK_HOME,
+        );
+        let is_black_kingside_supported = position.is_castling_right_supported(
+            Color::Black,
+            BLACK_KING_HOME,
+            BLACK_KINGSIDE_ROOK_HOME,
+        );
+        let is_black_queenside_supported = position.is_castling_right_supported(
+            Color::Black,
+            BLACK_KING_HOME,
+            BLACK_QUEENSIDE_ROOK_HOME,
+        );
+        position.castling_rights = *CastlingRights::from_fen(castling_rights).keep_supported(
+            is_white_kingside_supported,
+            is_white_queenside_supported,
+            is_black_kingside_supported,
+            is_black_queenside_supported,
+        );
         // En passant capture square
         let ep_square = fields.next().unwrap_or("-");
         if ep_square == "-" {

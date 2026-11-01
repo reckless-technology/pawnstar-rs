@@ -13,7 +13,7 @@ use pawnstar::castling_rights::CastlingRights;
 use pawnstar::chess_clock::{ChessClock, ClockType};
 use pawnstar::constants::{Color, Piece};
 use pawnstar::history_table::HistoryTable;
-use pawnstar::moves::{Move, MoveList, NodeType};
+use pawnstar::moves::{Move, MoveList, MoveType, NodeType};
 use pawnstar::nnue::{expected_net_header, NetHeader, NetLoadOutcome, Network, NET_HEADER_BYTES};
 use pawnstar::opening_book::OpeningBook;
 use pawnstar::position::Position;
@@ -335,6 +335,109 @@ fn test_fen_fallbacks() {
     );
 }
 
+/// The castling field of a FEN against what the board can support (issue #30).
+/// A right is the engine's only record that its king and rook are home - the move generator tests
+/// the rights, the squares between and the squares the king crosses, and never looks for the rook -
+/// so a FEN asserting one the board cannot support put a position into the search that no game can
+/// reach: the generator emitted e1c1 and `make_move` moved a rook from an empty a1. Every such right
+/// is dropped at the parse, which is where the invariant the generator relies on is established.
+fn test_castling_rights_against_the_board() {
+    struct Case {
+        fen: &'static str,           // The FEN handed to from_string.
+        expect_rights: &'static str, // The castling field it must read back as.
+        castling_moves: usize,       // How many castling moves the side to move must then have.
+        what: &'static str,          // What the case is about.
+    }
+
+    // The first is the position from issue #30, out of Leela's test80 archive: a Chess960 game read
+    // as standard chess, so the rights say KQ while White's rooks stand on c1 and g1.
+    let cases = [
+        Case {
+            fen: "b2rk3/p2p1nr1/1p2n1p1/1Np2p1p/2P2P1P/1P1BP1P1/P4N2/2R1K1R1 w KQ - 1 16",
+            expect_rights: "-",
+            castling_moves: 0,
+            what: "issue #30: KQ with White's rooks on c1 and g1",
+        },
+        Case {
+            fen: "4k3/8/8/8/8/8/8/4K3 w KQkq - 0 1",
+            expect_rights: "-",
+            castling_moves: 0,
+            what: "every right claimed with no rook on the board",
+        },
+        Case {
+            fen: "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1",
+            expect_rights: "KQkq",
+            castling_moves: 2,
+            what: "every right supported, and both White castlings legal",
+        },
+        Case {
+            fen: "r3k3/8/8/8/8/8/8/R3K2R w KQkq - 0 1",
+            expect_rights: "KQq",
+            castling_moves: 2,
+            what: "Black's kingside right dropped, with no rook on h8",
+        },
+        Case {
+            fen: "4k3/8/8/8/8/8/8/rn2K2R w KQ - 0 1",
+            expect_rights: "K",
+            castling_moves: 1,
+            what: "a rook of the other colour on a1 supports nothing, and the knight keeps it off the king",
+        },
+        Case {
+            fen: "4k3/8/8/8/8/8/8/R2K3R w KQ - 0 1",
+            expect_rights: "-",
+            castling_moves: 0,
+            what: "a king off its home square supports neither right",
+        },
+        Case {
+            fen: "r3k2r/8/8/8/8/8/8/R3K1NR w KQkq - 0 1",
+            expect_rights: "KQkq",
+            castling_moves: 1,
+            what: "a right stands while a piece between king and rook blocks the move",
+        },
+    ];
+    for case in &cases {
+        let position = Position::from_string(case.fen);
+        let fen = position.to_string();
+        // The castling field is the third of a FEN, and to_string writes all six.
+        let rights = fen.split_whitespace().nth(2).unwrap_or("");
+        check(
+            rights == case.expect_rights,
+            &format!(
+                "{}: rights read back as {}, expected {}",
+                case.what, rights, case.expect_rights
+            ),
+        );
+        let castling_moves = position
+            .generate_legal_moves()
+            .iter()
+            .filter(|m| m.type_() == MoveType::Castling)
+            .count();
+        check(
+            castling_moves == case.castling_moves,
+            &format!(
+                "{}: {} castling moves generated, expected {}",
+                case.what, castling_moves, case.castling_moves
+            ),
+        );
+    }
+    // The board is what decides, so the same board with the rights spelled out and with them dropped
+    // parses to the same position, hash included - a position the search can be handed either way.
+    let from_bad_fen = Position::from_string(
+        "b2rk3/p2p1nr1/1p2n1p1/1Np2p1p/2P2P1P/1P1BP1P1/P4N2/2R1K1R1 w KQ - 1 16",
+    );
+    let from_clean_fen = Position::from_string(
+        "b2rk3/p2p1nr1/1p2n1p1/1Np2p1p/2P2P1P/1P1BP1P1/P4N2/2R1K1R1 w - - 1 16",
+    );
+    check(
+        from_bad_fen.hash == from_clean_fen.hash,
+        "the dropped rights leave the Zobrist hash of the real position",
+    );
+    check(
+        from_bad_fen.to_string() == from_clean_fen.to_string(),
+        "both FENs read back as the same position",
+    );
+}
+
 fn test_clock_and_platform() {
     let clock = ChessClock::default();
     check(
@@ -366,6 +469,7 @@ fn library_api_suite() {
     test_opening_book();
     test_material_draws();
     test_fen_fallbacks();
+    test_castling_rights_against_the_board();
     test_clock_and_platform();
     assert_eq!(
         common::summary("Library API: helpers, loaders and fallbacks the search does not call"),
