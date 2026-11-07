@@ -67,7 +67,7 @@ contains an evaluator trained on that data.
 
 Five engines are being unified onto one NNUE evaluator (skill `reckless-nnue`). The shared
 architecture — **this build's default since release 2.0.0** — adds two things to the shape the
-retired v12 net was trained for. Both were measured in zenith on this hardware, SPRT-gated, and
+retired v12 net was trained for. Both were measured in trebuchet on this hardware, SPRT-gated, and
 both only paid past ~1.4B training positions — at 190M they were neutral or negative, which is
 why v12 had neither:
 

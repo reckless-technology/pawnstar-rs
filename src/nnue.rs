@@ -35,14 +35,14 @@ pub const INPUT_SIZE: usize = 768; // Features per perspective per bucket: 2 col
 pub const HIDDEN_SIZE: usize = 1024; // Feature-transformer / accumulator width per perspective.
 
 /// Whether a perspective whose own king stands on files e-h is horizontally mirrored
-/// (`square ^ FILE_FLIP`) before indexing. Measured in zenith at **+14.3 Elo** at fixed depth, and
+/// (`square ^ FILE_FLIP`) before indexing. Measured in trebuchet at **+14.3 Elo** at fixed depth, and
 /// worth more than that number suggests: halving the king-placement space gives twice the
 /// effective data per bucket at the same file size, so it is a data multiplier as much as an Elo
 /// add. It only paid past ~1.4B training positions, which is why v12 does not have it.
 pub const IS_KING_MIRRORING_ENABLED: bool = cfg!(feature = "nnue-king-mirroring");
 
 /// Material output heads, selected by `output_bucket` from the piece count. Eight in the shared
-/// architecture, measured in zenith at **+14.7 Elo** at fixed depth; one in v12's shape. A
+/// architecture, measured in trebuchet at **+14.7 Elo** at fixed depth; one in v12's shape. A
 /// compile-time constant because it sizes the payload and is stamped into the header, so a net and
 /// a build can never disagree about it silently.
 pub const NUM_OUTPUT_BUCKETS: usize = if cfg!(feature = "nnue-output-buckets-8") {
