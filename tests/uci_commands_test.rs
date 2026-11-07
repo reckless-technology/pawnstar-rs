@@ -766,12 +766,17 @@ fn test_go_searches() {
     run(&mut engine, "stop");
     run(&mut engine, "stop");
 
-    // The FEN of issue #30, searched on the table every search above has warmed, which is how it
-    // died: it claims KQ with White's rooks on c1 and g1, and once the search moved the c1 rook away
-    // the generator emitted e1c1 and make_move moved a rook from an empty a1 - an access violation
-    // at depth 8 on Windows in the C++ engine, a panic here. The rights are dropped at the parse
-    // now, so what this asserts is the protocol's own promise: the search finishes and answers with
-    // a legal move.
+    // The FEN of issue #30: it claims KQ with White's rooks on c1 and g1, and once the search moved
+    // the c1 rook away the generator emitted e1c1 and make_move moved a rook from an empty a1 - an
+    // access violation at depth 8 on Windows in the C++ engine, a panic here. That it follows the
+    // searches above is only its place in this test: neither their warm table nor Lazy SMP helpers
+    // are needed. Measured on LEGION5I (Windows 11) on 2026-11-06 with the published binaries at
+    // depth 8, 2.1.0's search thread panicked at position.rs:455 with no bestmove from a fresh
+    // engine (5 of 5 at the default 32 threads), warmed (10 of 10) and at Threads 1, fresh and
+    // warmed (4 of 4); 2.2.0 answered all 30 trials. The fix's commit message, 4f9e1b8, says it
+    // needs a warm table and Lazy SMP; why its author saw otherwise is not known. The rights are
+    // dropped at the parse now, so what this asserts is the protocol's own promise: the search
+    // finishes and answers with a legal move.
     const ISSUE_30_FEN: &str =
         "b2rk3/p2p1nr1/1p2n1p1/1Np2p1p/2P2P1P/1P1BP1P1/P4N2/2R1K1R1 w KQ - 1 16";
     let before = Position::from_string(ISSUE_30_FEN);
