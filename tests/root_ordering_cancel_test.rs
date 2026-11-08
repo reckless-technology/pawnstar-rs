@@ -10,7 +10,9 @@
 //!
 //! The move whose search was interrupted and every move after it are now unsearched and rank below
 //! every searched move. The table's move for the root is played if it is a root move and its entry
-//! is deeper than the pass (an earlier, deeper search reached the root); otherwise the best
+//! is deeper than the pass (the pass can re-enter and store the root through a repetition, but
+//! such entries are shallower than the pass, so the test never prefers them; one can overwrite a
+//! deeper entry, and the rule then falls back to the best finished move); otherwise the best
 //! finished move; with none finished, the table's move at any depth (if it is a root move) or else
 //! the first generated move. This suite replays the ordering pass itself, move by move on a fresh
 //! game, to learn which moves finished under each node limit and what they scored, then holds

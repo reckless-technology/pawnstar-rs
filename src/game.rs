@@ -317,9 +317,10 @@ impl Game {
         let mut best_move = move_list[0];
         // Cancelled inside the pass. The moves that finished first are the cheap ones, and their
         // depth-3 scores miss what a deeper search sees, so prefer the root's table move when its
-        // entry is deeper than the pass: the root itself is never stored by this search (its moves
-        // are searched one by one, here and in iterative_deepen), so such an entry is the root
-        // reached inside an earlier, deeper search. Otherwise play the best completed move; and if
+        // entry is deeper than the pass. The pass can re-enter the root through a repetition and
+        // `search` then stores it, but such an entry is shallower than START_DEPTH, so the depth
+        // test never prefers it; it can overwrite a deeper entry, though, and the rule then falls
+        // back to the best completed move. Otherwise play the best completed move; and if
         // none completed, the table move at any depth, else the first generated (which the stable
         // sort left at the front). The move must be a root move: a hash collision can leave a move
         // from another position. With the cancel still pending, iterative_deepen returns this seed
