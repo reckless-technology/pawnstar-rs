@@ -277,8 +277,14 @@ impl Game {
         game.transposition_table.age();
 
         // Shallow pass for initial move ordering (on a temporary state shared as the launch ordering).
+        // A cancel (hard deadline, `stop`, node limit) can land inside it. The move being searched
+        // then returns the cancel sentinel, which must not become its score: negated and truncated
+        // to the 23-bit field it reads as about +3957070, sorted first and was played. So the pass
+        // stops there, and that move and every one after it rank below every searched move, in
+        // generation order (sort_moves is stable).
         let mut state = SearchState::new(game);
         let mut shallow_pv: Variation = Vec::new();
+        let mut searched_count = move_list.size();
         for move_index in 0..move_list.size() {
             let mv = move_list[move_index];
             let score = state
@@ -292,10 +298,32 @@ impl Game {
                     move_index as i32,
                 )
                 .score();
+            if state.is_cancelled() {
+                searched_count = move_index;
+                break;
+            }
             move_list[move_index].assign_score(score);
+        }
+        for move_index in searched_count..move_list.size() {
+            move_list[move_index].assign_score(UNSEARCHED_ROOT_MOVE_SCORE);
         }
         sort_moves(&mut move_list);
         let mut best_move = move_list[0];
+        // No root move finished: play the table's move for this position if it is a root move,
+        // else the first generated move (which the stable sort left at the front). With the
+        // cancel still pending, iterative_deepen returns this seed unchanged.
+        if searched_count == 0 {
+            if let Some(transposition) = game
+                .transposition_table
+                .find_transposition(game.current_position().hash)
+            {
+                if transposition.mv != Move::none() {
+                    if let Some(table_move) = move_list.iter().find(|mv| **mv == transposition.mv) {
+                        best_move = *table_move;
+                    }
+                }
+            }
+        }
 
         // Lazy SMP: each thread runs an independent iterative-deepening search of the same root,
         // sharing only the (lockless) transposition table (history/killers/etc. are per-thread on

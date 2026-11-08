@@ -98,6 +98,10 @@ pub const DRAW_SCORE: i32 = 0; // score for achieving a draw
 pub const MAX_PLY: usize = 64; // terminate the search at this ply no matter what
 pub const RANK_FLIP: u8 = 0x38; // used as an XOR mask to flip the board horizontally
 pub const SEARCH_CANCELLED_SCORE: i32 = -12345678; // illegal value returned when search is cancelled
+/// ALPHA - 1: the sort score of a root move the shallow ordering pass did not finish searching
+/// (the move it was on when the search was cancelled, and every move after it), below every real
+/// score. The C++ `kUnsearchedRootScore`.
+pub const UNSEARCHED_ROOT_MOVE_SCORE: i32 = ALPHA - 1;
 pub const SCORE_INSTABILITY_THRESHOLD: i32 = 50; // window of score variability
 pub const START_DEPTH: i32 = 3; // depth to do full width search
 pub const RFP_MAX_DEPTH: i32 = 7; // reverse-futility pruning: max depth to apply it
