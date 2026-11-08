@@ -183,6 +183,12 @@ impl Game {
             } else {
                 uci_println!("bestmove {}", mv.to_string());
             }
+        } else {
+            // No legal move (checkmate or stalemate): UCI still wants an answer, or the host
+            // waits for ever. `0000` is the null move; pawnstar-go answers the same, and prints
+            // no `info` line first. The ponder-wait above has already run, so `go ponder` holds
+            // this back until `ponderhit` or `stop`, like any other answer.
+            uci_println!("bestmove 0000");
         }
     }
 

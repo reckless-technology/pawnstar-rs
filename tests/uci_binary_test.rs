@@ -458,6 +458,51 @@ fn test_quit() {
     check(!has_line(&out, "readyok"), "nothing after quit is read");
 }
 
+/// A root with no legal move (checkmate, stalemate) is still answered, `bestmove 0000` as
+/// pawnstar-go does, on every kind of `go` and with no `info` line before it. It was once never
+/// answered at all, so a host waited for ever.
+fn test_no_legal_move_is_answered() {
+    for (name, fen) in [
+        ("mate", "7k/5Q2/6K1/8/8/8/8/8 b - - 0 1"),
+        ("stalemate", "7k/5Q2/8/6K1/8/8/8/8 b - - 0 1"),
+    ] {
+        let input = format!(
+            "setoption name OwnBook value false
+position fen {fen}
+             go depth 5
+go infinite
+stop
+go ponder
+stop
+go movetime 50
+             go wtime 1000 btime 1000
+isready
+quit
+"
+        );
+        let (out, _) = run_engine(
+            Path::new(ENGINE),
+            Path::new(MANIFEST_DIR),
+            &[("PAWNSTAR_THREADS", "1")],
+            &input,
+        );
+        let answers = out.lines().filter(|l| *l == "bestmove 0000").count();
+        check(
+            answers == 5,
+            &format!("{name}: five gos, five bestmove 0000 (got {answers})"),
+        );
+        check(
+            !out.lines()
+                .any(|l| l.starts_with("info ") && !l.starts_with("info string")),
+            &format!("{name}: no search info line is printed first"),
+        );
+        check(
+            has_line(&out, "readyok"),
+            &format!("{name}: isready is answered"),
+        );
+    }
+}
+
 /// A net that is *there* and fails one of the container's checks stops the engine. It must not be
 /// quietly replaced by the embedded net: an engine that substituted one would play a whole match
 /// on weights nobody asked for, and the match would report a plausible Elo for a net that never
@@ -655,6 +700,7 @@ fn uci_binary_suite() {
     test_resources_beside_the_executable();
     test_broken_book_falls_back();
     test_quit();
+    test_no_legal_move_is_answered();
     assert_eq!(
         common::summary(
             "UCI binary: banner, resource lookup, embedded fallbacks, a refused EvalFile, quit"
