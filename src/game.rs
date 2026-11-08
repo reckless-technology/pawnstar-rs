@@ -315,15 +315,23 @@ impl Game {
         }
         sort_moves(&mut move_list);
         let mut best_move = move_list[0];
-        // No root move finished: play the table's move for this position if it is a root move,
-        // else the first generated move (which the stable sort left at the front). With the
-        // cancel still pending, iterative_deepen returns this seed unchanged.
-        if searched_count == 0 {
+        // Cancelled inside the pass. The moves that finished first are the cheap ones, and their
+        // depth-3 scores miss what a deeper search sees, so prefer the root's table move when its
+        // entry is deeper than the pass: the root itself is never stored by this search (its moves
+        // are searched one by one, here and in iterative_deepen), so such an entry is the root
+        // reached inside an earlier, deeper search. Otherwise play the best completed move; and if
+        // none completed, the table move at any depth, else the first generated (which the stable
+        // sort left at the front). The move must be a root move: a hash collision can leave a move
+        // from another position. With the cancel still pending, iterative_deepen returns this seed
+        // unchanged.
+        if searched_count < move_list.size() {
             if let Some(transposition) = game
                 .transposition_table
                 .find_transposition(game.current_position().hash)
             {
-                if transposition.mv != Move::none() {
+                if transposition.mv != Move::none()
+                    && (transposition.depth() > START_DEPTH || searched_count == 0)
+                {
                     if let Some(table_move) = move_list.iter().find(|mv| **mv == transposition.mv) {
                         best_move = *table_move;
                     }

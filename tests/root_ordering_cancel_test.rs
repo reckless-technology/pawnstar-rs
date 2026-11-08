@@ -9,10 +9,12 @@
 //! b2b1r in about 80 ms (White mates in 5) where `go depth 4` prefers h8g7.
 //!
 //! The move whose search was interrupted and every move after it are now unsearched and rank below
-//! every searched move; with none searched, the table's move for the root (if it is a root move) or
-//! else the first generated move is played. This suite replays the ordering pass itself, move by
-//! move on a fresh game, to learn which moves finished under each node limit and what they scored,
-//! then holds `search_root_node` to the move that rule picks. A node limit is the deterministic
+//! every searched move. The table's move for the root is played if it is a root move and its entry
+//! is deeper than the pass (an earlier, deeper search reached the root); otherwise the best
+//! finished move; with none finished, the table's move at any depth (if it is a root move) or else
+//! the first generated move. This suite replays the ordering pass itself, move by move on a fresh
+//! game, to learn which moves finished under each node limit and what they scored, then holds
+//! `search_root_node` to the move that rule picks. A node limit is the deterministic
 //! cancel: the search polls it every 2048 nodes, so at Threads 1 it lands at the same node every
 //! time.
 //!
@@ -239,6 +241,85 @@ fn test_cancel_before_any_move_finished() {
     }
 }
 
+/// Cancelled part-way, with a table entry for the root deeper than the pass, as an earlier search
+/// of the game leaves one: its move is played, even one the pass never reached, ahead of the best
+/// finished move. An entry at the pass's own depth, or one whose move is not a root move here, is
+/// passed over for the best finished move. The first node limit, doubling from 2048, at which the
+/// pass is cancelled after a move has finished is the one checked.
+fn test_deep_table_move_when_cancelled_part_way() {
+    // A move that is not a root move here (the start position's first move).
+    let foreign_move = Position::from_string(START_FEN).generate_legal_moves()[0];
+    let mut max_nodes: u64 = 2048;
+    while max_nodes <= 1 << 24 {
+        let pass = replay_ordering_pass(max_nodes, false);
+        let finished = pass.iter().filter(|(_, score)| score.is_some()).count();
+        if finished == pass.len() {
+            check(
+                false,
+                "a node limit cancels the ordering pass after a move has finished, for the table-move cases",
+            );
+            break;
+        }
+        let Some(expected) = best_finished(&pass) else {
+            max_nodes *= 2;
+            continue;
+        };
+        // A move the pass did not finish, so that playing it can only come from the table.
+        let unreached_move = pass[pass.len() - 1].0;
+        check(
+            finished < pass.len() - 1 && unreached_move != expected,
+            &format!(
+                "go nodes {max_nodes}: the last generated move {} is not reached by the cancelled pass",
+                unreached_move.to_string()
+            ),
+        );
+        let search_with_root_entry = |table_move: Move, depth: i32| {
+            let game = fresh_game(max_nodes, 1);
+            game.transposition_table
+                .record_transposition(&Transposition::with_data(
+                    game.current_position().hash,
+                    table_move,
+                    0,
+                    depth,
+                    NodeType::Pv,
+                ));
+            game.search_root_node()
+        };
+        let played = search_with_root_entry(unreached_move, START_DEPTH + 1);
+        check(
+            played == unreached_move,
+            &format!(
+                "go nodes {max_nodes}: cancelled after {finished} of {} moves with a depth-{} table move {}: plays it ({}), not the best finished move {}",
+                pass.len(),
+                START_DEPTH + 1,
+                unreached_move.to_string(),
+                played.to_string(),
+                expected.to_string()
+            ),
+        );
+        let played = search_with_root_entry(unreached_move, START_DEPTH);
+        check(
+            played == expected,
+            &format!(
+                "go nodes {max_nodes}: cancelled part-way with a table move only as deep as the pass: plays the best finished move {} ({})",
+                expected.to_string(),
+                played.to_string()
+            ),
+        );
+        let played = search_with_root_entry(foreign_move, START_DEPTH + 1);
+        check(
+            played == expected,
+            &format!(
+                "go nodes {max_nodes}: cancelled part-way with a deep table move {} that is not a root move: plays the best finished move {} ({})",
+                foreign_move.to_string(),
+                expected.to_string(),
+                played.to_string()
+            ),
+        );
+        break;
+    }
+}
+
 #[test]
 fn root_ordering_cancel_suite() {
     if !common::is_shipped_net_this_builds_shape() {
@@ -247,6 +328,7 @@ fn root_ordering_cancel_suite() {
     }
     test_node_limits_inside_the_pass();
     test_cancel_before_any_move_finished();
+    test_deep_table_move_when_cancelled_part_way();
     let failures = common::summary("ROOT ORDERING CANCEL TESTS");
     assert_eq!(failures, 0);
 }
