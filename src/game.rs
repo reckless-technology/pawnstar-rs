@@ -290,48 +290,100 @@ impl Game {
         // generation order (sort_moves is stable).
         let mut state = SearchState::new(game);
         let mut shallow_pv: Variation = Vec::new();
-        let mut searched_count = move_list.size();
-        for move_index in 0..move_list.size() {
-            let mv = move_list[move_index];
-            let score = state
-                .search_single_move(
-                    START_DEPTH,
-                    0,
-                    ALPHA,
-                    BETA,
-                    mv,
-                    &mut shallow_pv,
-                    move_index as i32,
-                )
-                .score();
-            if state.is_cancelled() {
-                searched_count = move_index;
-                break;
+        // One ordering pass: every root move searched to `depth` with the full window, in list
+        // order. Returns the number of moves whose search completed; a cancel stops it there.
+        let mut run_ordering_pass =
+            |state: &mut SearchState, move_list: &mut MoveList, depth: i32| {
+                let mut completed = 0;
+                for move_index in 0..move_list.size() {
+                    let mv = move_list[move_index];
+                    let score = state
+                        .search_single_move(
+                            depth,
+                            0,
+                            ALPHA,
+                            BETA,
+                            mv,
+                            &mut shallow_pv,
+                            move_index as i32,
+                        )
+                        .score();
+                    if state.is_cancelled() {
+                        break;
+                    }
+                    move_list[move_index].assign_score(score);
+                    completed += 1;
+                }
+                completed
+            };
+        // Under a hard limit the depth-3 pass can outlast the whole budget: on positions from
+        // 8+0.08 games it took up to 369k nodes from a cold table and 464 ms on a warm one, against
+        // an 80 ms budget (~115k nodes), so no search result existed when the deadline landed. A
+        // depth-1 pass, run with the PV extension off (see SearchState), costs about 2% of the
+        // depth-3 pass, and finishing it first means a completed search decides the move unless
+        // even that is cut. Without a limit (fixed depth, infinite, bench) the depth-3 pass runs
+        // alone, as before.
+        let has_hard_limit = max_search_time > 0 || game.time_control.max_nodes != 0;
+        let mut has_limited_ordering = false; // whether the depth-1 pass completed
+        let mut limited_ordering = MoveList::default(); // its moves, sorted by its scores
+        let mut completed_move_count = 0; // moves of the last pass run whose search completed
+        if has_hard_limit {
+            state.is_pv_extension_suppressed = true; // else a warm table makes this pass unbounded
+            completed_move_count =
+                run_ordering_pass(&mut state, &mut move_list, LIMITED_ORDERING_DEPTH);
+            state.is_pv_extension_suppressed = false;
+            has_limited_ordering = completed_move_count == move_list.size();
+            if has_limited_ordering {
+                sort_moves(&mut move_list);
+                limited_ordering = move_list.clone();
+                state.print_search_info(
+                    LIMITED_ORDERING_DEPTH,
+                    move_list[0].score(),
+                    &move_list[0].to_string(),
+                );
             }
-            move_list[move_index].assign_score(score);
         }
-        for move_index in searched_count..move_list.size() {
-            move_list[move_index].assign_score(UNSEARCHED_ROOT_MOVE_SCORE);
+        if !has_hard_limit || has_limited_ordering {
+            completed_move_count = run_ordering_pass(&mut state, &mut move_list, START_DEPTH);
         }
-        sort_moves(&mut move_list);
+        if has_limited_ordering && completed_move_count < move_list.size() {
+            move_list = limited_ordering; // the depth-3 pass was cut: order by the depth-1 pass
+        } else {
+            // Each move the last pass run did not complete is marked unsearched, below every real
+            // score, and the stable sort leaves the unsearched moves last in list order.
+            for move_index in completed_move_count..move_list.size() {
+                move_list[move_index].assign_score(UNSEARCHED_ROOT_MOVE_SCORE);
+            }
+            sort_moves(&mut move_list);
+            if has_hard_limit && completed_move_count == move_list.size() {
+                state.print_search_info(
+                    START_DEPTH,
+                    move_list[0].score(),
+                    &move_list[0].to_string(),
+                );
+            }
+        }
         let mut best_move = move_list[0];
-        // Cancelled inside the pass. The moves that finished first are the cheap ones, and their
-        // depth-3 scores miss what a deeper search sees, so prefer the root's table move when its
-        // entry is deeper than the pass. The pass can re-enter the root through a repetition and
-        // `search` then stores it, but such an entry is shallower than START_DEPTH, so the depth
-        // test never prefers it; it can overwrite a deeper entry, though, and the rule then falls
-        // back to the best completed move. Otherwise play the best completed move; and if
-        // none completed, the table move at any depth, else the first generated (which the stable
-        // sort left at the front). The move must be a root move: a hash collision can leave a move
-        // from another position. With the cancel still pending, iterative_deepen returns this seed
-        // unchanged.
-        if searched_count < move_list.size() {
+        // Cancelled inside a pass. The moves that finished first are the cheap ones, and their
+        // depth-3 scores miss what a deeper search sees (the depth-1 pass sees less still), so
+        // prefer the root's table move when its entry is deeper than the pass. A pass can re-enter
+        // the root through a repetition and `search` then stores it, but such an entry is shallower
+        // than START_DEPTH, so the depth test never prefers it; it can overwrite a deeper entry,
+        // though, and the rule then falls back to the best completed move. Otherwise play the best
+        // move of the completed depth-1 pass when there is one (a cut depth-3 pass is then set
+        // aside whole), else the best completed move of the pass that was cut; and if no move's
+        // search completed at all, the table move at any depth, else the first generated (which the
+        // stable sort left at the front). The move must be a root move: a hash collision can leave
+        // a move from another position. With the cancel still pending, iterative_deepen returns
+        // this seed unchanged.
+        if completed_move_count < move_list.size() {
+            let has_completed_search = has_limited_ordering || completed_move_count != 0;
             if let Some(transposition) = game
                 .transposition_table
                 .find_transposition(game.current_position().hash)
             {
                 if transposition.mv != Move::none()
-                    && (transposition.depth() > START_DEPTH || searched_count == 0)
+                    && (transposition.depth() > START_DEPTH || !has_completed_search)
                 {
                     if let Some(table_move) = move_list.iter().find(|mv| **mv == transposition.mv) {
                         best_move = *table_move;
