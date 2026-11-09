@@ -28,9 +28,9 @@ mod common;
 use std::sync::atomic::Ordering;
 
 use pawnstar::chess_clock::ClockType;
-use pawnstar::constants::{ALPHA, BETA, START_DEPTH};
+use pawnstar::constants::{ALPHA, BETA, LIMITED_ORDERING_DEPTH, START_DEPTH};
 use pawnstar::game::{Game, START_FEN};
-use pawnstar::moves::{Move, NodeType};
+use pawnstar::moves::{sort_moves, Move, NodeType};
 use pawnstar::position::Position;
 use pawnstar::search_state::{SearchState, Variation};
 use pawnstar::transposition_table::Transposition;
@@ -60,32 +60,84 @@ fn fresh_game(max_nodes: u64, thread_count: i32) -> Box<Game> {
     game
 }
 
-/// The ordering pass replayed on a fresh game, as `search_root_node` runs it: the root moves in
-/// generation order, each with its depth-3 score, or None for a move whose search the cancel
-/// interrupted and every move after it.
-fn replay_ordering_pass(max_nodes: u64, is_cancelled_at_start: bool) -> Vec<(Move, Option<i32>)> {
-    let game = fresh_game(max_nodes, 1);
-    game.is_cancel_pending
-        .store(is_cancelled_at_start, Ordering::Relaxed);
-    let move_list = game.current_position().generate_legal_moves();
-    game.time_control.start_search(0, 0);
-    game.transposition_table.age();
-    let mut state = SearchState::new(&game);
-    let mut pv: Variation = Vec::new();
+/// The ordering passes replayed on a fresh game, as `search_root_node` runs them.
+struct ReplayedPass {
+    /// The pass that decides the move if a cancel lands in it: the root moves in generation order
+    /// with their scores, None for a move whose search the cancel interrupted and every move after
+    /// it. Under a node limit this is the depth-1 pass while that is cut; once it completes it is
+    /// the depth-1 pass's scores (the limited ordering) and `is_cut` says whether the depth-3 pass
+    /// that followed it, run over the stably sorted list, was cut.
+    moves: Vec<(Move, Option<i32>)>,
+    /// Whether a cancel cut the last pass run, so that no completed search decides the move.
+    is_cut: bool,
+}
+
+/// One ordering pass of `depth` over `moves` in list order, as `search_root_node` runs it.
+fn replay_one_pass(
+    state: &mut SearchState,
+    pv: &mut Variation,
+    moves: &[Move],
+    depth: i32,
+) -> Vec<(Move, Option<i32>)> {
     let mut results = Vec::new();
     let mut is_interrupted = false;
-    for (move_index, mv) in move_list.iter().enumerate() {
+    for (move_index, mv) in moves.iter().enumerate() {
         if is_interrupted {
             results.push((*mv, None));
             continue;
         }
         let score = state
-            .search_single_move(START_DEPTH, 0, ALPHA, BETA, *mv, &mut pv, move_index as i32)
+            .search_single_move(depth, 0, ALPHA, BETA, *mv, pv, move_index as i32)
             .score();
         is_interrupted = state.is_cancelled();
         results.push((*mv, if is_interrupted { None } else { Some(score) }));
     }
     results
+}
+
+/// The ordering passes replayed on a fresh game. Under a node limit the depth-1 pass runs first
+/// with the PV extension off; if it completes, its moves are stably sorted by score and the depth-3
+/// pass runs over them in that order. With no node limit only the depth-3 pass runs.
+fn replay_ordering_pass(max_nodes: u64, is_cancelled_at_start: bool) -> ReplayedPass {
+    let game = fresh_game(max_nodes, 1);
+    game.is_cancel_pending
+        .store(is_cancelled_at_start, Ordering::Relaxed);
+    let mut move_list = game.current_position().generate_legal_moves();
+    let generated: Vec<Move> = (0..move_list.size())
+        .map(|index| move_list[index])
+        .collect();
+    game.time_control.start_search(0, 0);
+    game.transposition_table.age();
+    let mut state = SearchState::new(&game);
+    let mut pv: Variation = Vec::new();
+    if max_nodes == 0 {
+        let moves = replay_one_pass(&mut state, &mut pv, &generated, START_DEPTH);
+        let is_cut = moves.iter().any(|(_, score)| score.is_none());
+        return ReplayedPass { moves, is_cut };
+    }
+    state.is_pv_extension_suppressed = true;
+    let limited = replay_one_pass(&mut state, &mut pv, &generated, LIMITED_ORDERING_DEPTH);
+    state.is_pv_extension_suppressed = false;
+    if limited.iter().any(|(_, score)| score.is_none()) {
+        return ReplayedPass {
+            moves: limited,
+            is_cut: true,
+        };
+    }
+    // Stable sort by the depth-1 scores, best first, ties in generation order.
+    for (index, (_, score)) in limited.iter().enumerate() {
+        move_list[index].assign_score(score.unwrap());
+    }
+    sort_moves(&mut move_list);
+    let order: Vec<Move> = (0..move_list.size())
+        .map(|index| move_list[index])
+        .collect();
+    let deep = replay_one_pass(&mut state, &mut pv, &order, START_DEPTH);
+    let is_cut = deep.iter().any(|(_, score)| score.is_none());
+    ReplayedPass {
+        moves: if is_cut { limited } else { deep },
+        is_cut,
+    }
 }
 
 /// The best of the moves that finished: the highest score, the earliest generated on a tie (the
@@ -112,19 +164,24 @@ fn describe(pass: &[(Move, Option<i32>)]) -> String {
         .join(" ")
 }
 
-/// Under each node limit the move played is the best finished move, and never the move whose
-/// search was interrupted. On this FEN every limit up to at least 262144 nodes lands inside the
-/// pass, and at least one move has always finished by the first poll, at node 2048.
+/// Under each node limit the move played is the best move of the depth-1 pass when that completed
+/// and the depth-3 pass was cut (a cut pass is set aside whole), else the best finished move of the
+/// depth-1 pass that was cut; and never the move whose search was interrupted. On this FEN the
+/// depth-1 pass takes 1,982 nodes, so the first poll (node 2048) falls inside the depth-3 pass at
+/// every limit from 64 up, and inside the depth-1 pass only when the table is warm.
 fn test_node_limits_inside_the_pass() {
     let mut cancelled_passes = 0;
     for max_nodes in [64, 2048, 4096, 16384, 65536, 131072, 262144] {
-        let pass = replay_ordering_pass(max_nodes, false);
-        let finished = pass.iter().filter(|(_, score)| score.is_some()).count();
-        if finished == pass.len() {
-            continue; // the limit fell after the pass; nothing of this fix is exercised
+        let replayed = replay_ordering_pass(max_nodes, false);
+        if !replayed.is_cut {
+            continue; // the limit fell after the passes; nothing of this fix is exercised
         }
+        let pass = replayed.moves;
+        let finished = pass.iter().filter(|(_, score)| score.is_some()).count();
         cancelled_passes += 1;
-        let interrupted = pass[finished].0;
+        // A cut depth-1 pass leaves an interrupted move; a cut depth-3 pass is set aside whole,
+        // and the depth-1 ordering (all its moves finished) decides.
+        let interrupted = pass.get(finished).map(|(mv, _)| *mv);
         let Some(expected) = best_finished(&pass) else {
             check(
                 false,
@@ -146,13 +203,15 @@ fn test_node_limits_inside_the_pass() {
                 describe(&pass)
             ),
         );
-        check(
-            played != interrupted,
-            &format!(
-                "go nodes {max_nodes}: does not play {}, the move whose search was interrupted",
-                interrupted.to_string()
-            ),
-        );
+        if let Some(interrupted) = interrupted {
+            check(
+                played != interrupted,
+                &format!(
+                    "go nodes {max_nodes}: does not play {}, the move whose search was interrupted",
+                    interrupted.to_string()
+                ),
+            );
+        }
         // Helpers launch after the pass, so with three threads the cancelled pass picks the same
         // move, and the helpers wind up and join.
         let played_with_helpers = fresh_game(max_nodes, 3).search_root_node();
@@ -175,7 +234,7 @@ fn test_node_limits_inside_the_pass() {
 /// move is played then, or, when the table holds a root move for the root, that move; with three
 /// threads too, since the helpers launch after the pass.
 fn test_cancel_before_any_move_finished() {
-    let pass = replay_ordering_pass(0, true);
+    let pass = replay_ordering_pass(0, true).moves;
     check(
         pass.iter().all(|(_, score)| score.is_none()),
         &format!(
@@ -253,15 +312,16 @@ fn test_deep_table_move_when_cancelled_part_way() {
     let foreign_move = Position::from_string(START_FEN).generate_legal_moves()[0];
     let mut max_nodes: u64 = 2048;
     while max_nodes <= 1 << 24 {
-        let pass = replay_ordering_pass(max_nodes, false);
-        let finished = pass.iter().filter(|(_, score)| score.is_some()).count();
-        if finished == pass.len() {
+        let replayed = replay_ordering_pass(max_nodes, false);
+        if !replayed.is_cut {
             check(
                 false,
-                "a node limit cancels the ordering pass after a move has finished, for the table-move cases",
+                "a node limit cancels an ordering pass after a move has finished, for the table-move cases",
             );
             break;
         }
+        let pass = replayed.moves;
+        let finished = pass.iter().filter(|(_, score)| score.is_some()).count();
         let Some(expected) = best_finished(&pass) else {
             max_nodes *= 2;
             continue;
@@ -269,10 +329,11 @@ fn test_deep_table_move_when_cancelled_part_way() {
         // A move the pass did not finish, so that playing it can only come from the table.
         let unreached_move = pass[pass.len() - 1].0;
         check(
-            finished < pass.len() - 1 && unreached_move != expected,
+            unreached_move != expected,
             &format!(
-                "go nodes {max_nodes}: the last generated move {} is not reached by the cancelled pass",
-                unreached_move.to_string()
+                "go nodes {max_nodes}: the last generated move {} is not the move the passes pick ({finished} of {} finished)",
+                unreached_move.to_string(),
+                pass.len()
             ),
         );
         let search_with_root_entry = |table_move: Move, depth: i32| {

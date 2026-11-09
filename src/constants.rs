@@ -104,6 +104,7 @@ pub const SEARCH_CANCELLED_SCORE: i32 = -12345678; // illegal value returned whe
 pub const UNSEARCHED_ROOT_MOVE_SCORE: i32 = ALPHA - 1;
 pub const SCORE_INSTABILITY_THRESHOLD: i32 = 50; // window of score variability
 pub const START_DEPTH: i32 = 3; // depth to do full width search
+pub const LIMITED_ORDERING_DEPTH: i32 = 1; // the pass run first under a hard deadline or node limit
 pub const RFP_MAX_DEPTH: i32 = 7; // reverse-futility pruning: max depth to apply it
 pub const RFP_MARGIN: i32 = 80; // reverse-futility pruning: centipawn margin per ply
 pub const LMP_MAX_DEPTH: i32 = 8; // late-move (move-count) pruning: max depth to apply it

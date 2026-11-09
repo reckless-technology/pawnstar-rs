@@ -39,12 +39,17 @@ pub type KillerArray = [[Move; 2]; MAX_PLY];
 /// cache-line contention on its hot counters.
 pub struct SearchState<'a> {
     // State variables
-    pub game: &'a Game,           // Shared state: TT, clock, cancellation flag.
-    pub history: HistoryTable,    // Per-thread history heuristic counts (no sharing).
-    pub killers: KillerArray,     // Killer moves indexed by ply.
-    pub node_count: u64,          // Cumulative nodes this thread searched.
-    pub seldepth: i32,            // Max ply reached this search (selective depth, for `info`).
-    pub positions: Vec<Position>, // Position stack.
+    pub game: &'a Game,        // Shared state: TT, clock, cancellation flag.
+    pub history: HistoryTable, // Per-thread history heuristic counts (no sharing).
+    pub killers: KillerArray,  // Killer moves indexed by ply.
+    pub node_count: u64,       // Cumulative nodes this thread searched.
+    pub seldepth: i32,         // Max ply reached this search (selective depth, for `info`).
+    /// Set only while the root's depth-1 ordering pass runs (`search_root_node`, under a hard
+    /// limit): a table hit on a PV entry then does not extend the depth. On a table warm from
+    /// deeper searches every such hit adds the ply the move took away, so along the stored lines
+    /// the depth never falls and even a depth-1 search runs on to MAX_PLY.
+    pub is_pv_extension_suppressed: bool,
+    pub positions: Vec<Position>,          // Position stack.
     pub acc_stack: Vec<nnue::Accumulator>, // Per-ply NNUE accumulators (copy-make; see current_accumulator).
     pub acc_valid: Vec<bool>,              // acc_stack[i] is up to date iff acc_valid[i].
     pub hash_stack: Vec<HashEntry>,        // Draw by repetition stack.
@@ -68,6 +73,7 @@ impl<'a> SearchState<'a> {
             killers: [[Move::none(); 2]; MAX_PLY],
             node_count: 0,
             seldepth: 0,
+            is_pv_extension_suppressed: false,
             positions: Vec::new(),
             acc_stack: Vec::new(),
             acc_valid: Vec::new(),
@@ -553,7 +559,9 @@ impl<'a> SearchState<'a> {
                     }
                     NodeType::Pv => {
                         increment!("table hit pv node");
-                        depth += 1; // extend depth if we think we are on the PV
+                        if !self.is_pv_extension_suppressed {
+                            depth += 1; // extend depth if we think we are on the PV
+                        }
                     }
                 }
             }
@@ -862,6 +870,36 @@ impl<'a> SearchState<'a> {
     // Iterative deepening — one Lazy SMP thread. Game::search_root_node launches one per thread.
     // ------------------------------------------------------------------------
 
+    /// Print one `info depth` line: the depth, this thread's seldepth, the score, the time since
+    /// the search started, this thread's node count, its speed, the table's fill and the principal
+    /// variation given (its moves separated by single spaces).
+    pub fn print_search_info(&self, depth: i32, score: i32, pv_string: &str) {
+        // Report a forced mate as `score mate <moves>` (positive = we mate, negative = we get
+        // mated) rather than a huge `cp` value. Mate scores are +/-(MATE_VALUE - plies_to_mate),
+        // so plies_to_mate = MATE_VALUE - |score| and the move count rounds up (+1)/2.
+        const MATE_VALUE: i32 = -CHECKMATED_SCORE; // 31900
+        let score_string = if score >= WIN_THRESHOLD {
+            format!("mate {:2}", (MATE_VALUE - score + 1) / 2)
+        } else if score <= LOSE_THRESHOLD {
+            format!("mate {:2}", -((MATE_VALUE + score + 1) / 2))
+        } else {
+            format!("cp {:4}", score)
+        };
+        let elapsed_ms = self.game.time_control.elapsed_since_search_start();
+        let nps = (self.node_count as i64) * 1000 / elapsed_ms.max(1);
+        uci_println!(
+            "info depth {:2} seldepth {:2} score {} time {:5} nodes {:8} nps {:7} hashfull {:3} pv {}",
+            depth,
+            self.seldepth,
+            score_string,
+            elapsed_ms,
+            self.node_count,
+            nps,
+            self.game.transposition_table.hashfull_permille(),
+            pv_string
+        );
+    }
+
     /// Run iterative deepening on this search state — one Lazy SMP thread.
     /// The main thread (`thread_id` 0) prints info, applies time management and produces the
     /// authoritative move. `move_list` is this thread's copy of the root move list (re-sorted per
@@ -948,31 +986,7 @@ impl<'a> SearchState<'a> {
                             pv_string.push(' ');
                         }
                         pv_string.pop();
-                        // Report a forced mate as `score mate <moves>` (positive = we mate,
-                        // negative = we get mated) rather than a huge `cp` value. Mate scores are
-                        // +/-(MATE_VALUE - plies_to_mate), so plies_to_mate = MATE_VALUE - |score|
-                        // and the move count rounds up (+1)/2.
-                        const MATE_VALUE: i32 = -CHECKMATED_SCORE; // 31900
-                        let score_string = if alpha >= WIN_THRESHOLD {
-                            format!("mate {:2}", (MATE_VALUE - alpha + 1) / 2)
-                        } else if alpha <= LOSE_THRESHOLD {
-                            format!("mate {:2}", -((MATE_VALUE + alpha + 1) / 2))
-                        } else {
-                            format!("cp {:4}", alpha)
-                        };
-                        let elapsed_ms = self.game.time_control.elapsed_since_search_start();
-                        let nps = (self.node_count as i64) * 1000 / elapsed_ms.max(1);
-                        uci_println!(
-                            "info depth {:2} seldepth {:2} score {} time {:5} nodes {:8} nps {:7} hashfull {:3} pv {}",
-                            depth,
-                            self.seldepth,
-                            score_string,
-                            elapsed_ms,
-                            self.node_count,
-                            nps,
-                            self.game.transposition_table.hashfull_permille(),
-                            pv_string
-                        );
+                        self.print_search_info(depth, alpha, &pv_string);
                     }
                 }
             }
