@@ -449,7 +449,7 @@ parity depends on it.
 |---|---|
 | Check extension | A node in check searches one ply deeper. Quiescence hands a position in check back to `search`. |
 | Promotion and en passant extensions | The child of a promotion or an en passant capture searches one ply deeper. |
-| Transposition table | A Cut entry at sufficient depth returns its score if it is ≥ beta. An All entry returns its score if it is ≤ alpha. A PV entry extends the depth by one (not in the depth-1 root ordering pass). That extension is **not bounded**: on a warm table it can repeat down a line, so `seldepth` reaches 62, the most `MAX_PLY` (64) allows. |
+| Transposition table | A Cut entry at sufficient depth returns its score if it is ≥ beta. An All entry returns its score if it is ≤ alpha. A PV entry extends the depth by one (not in the depth-1 root ordering pass). That extension is **not bounded**: on a warm table it can repeat down a line, so `seldepth` reaches 62, the most `MAX_PLY` (64) allows (measured in the Go port, which searches identically: 18.4% of warm depth-4 lines reached `seldepth` 40 or more, against 3.2% cold). |
 | Internal iterative reduction | At depth ≥ 4 with no TT move, search one ply shallower. |
 | Reverse futility pruning | At a non-PV node not in check, at depth ≤ 7 and outside the mate band, return the eval if `eval − 80·depth ≥ beta`. |
 | Null-move pruning | At a non-PV node not in check, after a real move, with more than three pieces of our own and `eval ≥ beta`: pass and search at `depth − 4`. A fail-high returns beta. |
@@ -641,8 +641,13 @@ meaning other squares would load cleanly and read the wrong weight bank. `stamp_
 build's constants, so a net stamped by a tool built at another architecture carries that architecture's header and is
 then refused - the header, never the file name, says what a net is.
 
-The shipped net, **v20** (release 2.0.0), is trained **entirely on Leela Chess Zero self-play data**. It measured
-**+9.99 Elo at 8+0.08** over 8,000 games and **+1.13 at 12+0.12** over 12,000 games against v12, the net it replaces (matches run for the 2.0.0 release, 2026-10-30; the machine was not recorded).
+The shipped net, **v20** (release 2.0.0), is trained **entirely on Leela Chess Zero self-play data**. Against v12, the net it
+replaces, it measured **+9.99 Elo (95% +4.33 to +15.66) at 8+0.08** over 8,000 games and **+1.13 (-3.17 to +5.43;
+widened for over-dispersion, -4.90 to +7.16) at 12+0.12** over 12,000 games, played on 2026-10-30 on reckless-ci-lin-0,
+with reckless-ci-lin-2 playing 8,000 of the 12,000. So v20 is **non-inferior** to v12, not shown stronger: the
+12+0.12 result cannot separate "nothing" from "a few Elo". The 8+0.08 figure is biased upward, since the run was
+extended because its first stage looked good (that stage alone gave +7.21 ± 7.99). v12 was itself trained on
+PlentyChess data and v20 on Leela data alone, so non-inferiority is what let the dependency go.
 
 That training data is the **Leela Chess Zero self-play training data**
 (<https://storage.lczero.org/files/training_data/>), runs `test91` (62.83% of the pool) and `test60` (37.17%),
