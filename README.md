@@ -1,9 +1,9 @@
 # Pawnstar (Rust)
 
 A UCI chess engine written in Rust: a mechanical port of the C++
-[Pawnstar](https://github.com/jonny-reckless/pawnstar) engine. It has a bitboard board representation with magic
+[Pawnstar](https://github.com/reckless-technology/pawnstar) engine. It has a bitboard board representation with magic
 bitboards, fully legal move generation, a Lazy SMP alpha-beta search, and an NNUE evaluation (1024 wide, 8 king
-buckets). A sibling [Go port](https://github.com/jonny-reckless/pawnstar-go) exists too, and all three engines are
+buckets). A sibling [Go port](https://github.com/reckless-technology/pawnstar-go) exists too, and all three engines are
 bit-exact with one another.
 
 **Bit-exact with the C++ original.** At a fixed depth, single-threaded, this port runs exactly the same search as
@@ -399,8 +399,15 @@ engine's.
 
 1. Returns a book move at once if `OwnBook` is on and the book knows the position.
 2. Applies `go searchmoves`, then returns a forced move (the only legal one) without searching.
-3. Plans the time (below), ages the transposition table, and searches every root move at `START_DEPTH` (3) to order
-   them.
+3. Plans the time (below), ages the transposition table, and orders the root moves by searching every one with the
+   full window. With **no hard limit** (fixed depth, `infinite`, `bench`) that is one pass at `START_DEPTH` (3). Under
+   a **hard limit** - a hard deadline (after `Move Overhead`) or `go nodes` - a depth-1 pass runs first
+   (`LIMITED_ORDERING_DEPTH`), with the PV extension switched off (`is_pv_extension_suppressed`) so that a warm
+   table cannot make it unbounded, and prints an `info depth 1` line; then the depth-3 pass. If a cancel cuts the
+   depth-3 pass, the depth-1 order is kept (the cut pass is set aside whole), and a deeper transposition-table move
+   for the root is preferred over either. If even the depth-1 pass is cut, the best move that finished is played,
+   never the one whose search was interrupted. (Before 2.3.1 the depth-3 pass ran alone, and a deadline inside it
+   could leave no search result at all.)
 4. Launches the threads. Each one's `iterative_deepen` runs from depth 4 upwards. At each depth it re-sorts the root
    moves by the previous iteration's scores and searches them all in one full-window pass. Alpha rises as moves
    improve, so every move after the first is a null-window scout.
@@ -442,7 +449,7 @@ parity depends on it.
 |---|---|
 | Check extension | A node in check searches one ply deeper. Quiescence hands a position in check back to `search`. |
 | Promotion and en passant extensions | The child of a promotion or an en passant capture searches one ply deeper. |
-| Transposition table | A Cut entry at sufficient depth returns its score if it is ≥ beta. An All entry returns its score if it is ≤ alpha. A PV entry extends the depth by one. |
+| Transposition table | A Cut entry at sufficient depth returns its score if it is ≥ beta. An All entry returns its score if it is ≤ alpha. A PV entry extends the depth by one (not in the depth-1 root ordering pass). That extension is **not bounded**: on a warm table it can repeat down a line, so `seldepth` reaches 62, the most `MAX_PLY` (64) allows. |
 | Internal iterative reduction | At depth ≥ 4 with no TT move, search one ply shallower. |
 | Reverse futility pruning | At a non-PV node not in check, at depth ≤ 7 and outside the mate band, return the eval if `eval − 80·depth ≥ beta`. |
 | Null-move pruning | At a non-PV node not in check, after a real move, with more than three pieces of our own and `eval ≥ beta`: pass and search at `depth − 4`. A fail-high returns beta. |
@@ -465,7 +472,7 @@ stores the transposition table. When in check it calls `search` instead, which s
 
 The captures are sorted by SEE (below), so the loop **stops at the first losing capture**. Every move after it loses
 material too, so none is searched and no SEE is computed again. In the C++, dropping the quiescence table for this
-sorted early exit was worth +38.65 ± 13.78 Elo at 8+0.08.
+sorted early exit was worth +38.65 ± 13.78 Elo at 8+0.08 (a figure from the C++ repository, not re-measured here).
 
 #### Move ordering
 
@@ -635,7 +642,7 @@ build's constants, so a net stamped by a tool built at another architecture carr
 then refused - the header, never the file name, says what a net is.
 
 The shipped net, **v20** (release 2.0.0), is trained **entirely on Leela Chess Zero self-play data**. It measured
-**+9.99 Elo at 8+0.08** over 8,000 games and **+1.13 at 12+0.12** over 12,000 games against v12, the net it replaces.
+**+9.99 Elo at 8+0.08** over 8,000 games and **+1.13 at 12+0.12** over 12,000 games against v12, the net it replaces (matches run for the 2.0.0 release, 2026-10-30; the machine was not recorded).
 
 That training data is the **Leela Chess Zero self-play training data**
 (<https://storage.lczero.org/files/training_data/>), runs `test91` (62.83% of the pool) and `test60` (37.17%),
@@ -684,7 +691,7 @@ and runs searches on a worker thread so `stop` and `ponderhit` are heard during 
 | `go movetime <ms>`, `depth <n>`, `nodes <n>`, `infinite` | A fixed time, depth or node count, or until `stop`. The node limit is checked per thread, so it is exact at `Threads=1`. |
 | `go searchmoves <m…>` | Restricts the root search to these moves. |
 | `go … ponder`, `ponderhit` | Searches on the opponent's time. No `bestmove` is sent until `ponderhit` (which starts the clock from that moment) or `stop`. |
-| `stop`, `quit` | Ends the search and sends `bestmove`, with `ponder <reply>` when the PV has a reply; `quit` also exits. |
+| `stop`, `quit` | Ends the search and sends `bestmove`, with `ponder <reply>` when the PV has a reply; `quit` also exits. A position with no legal move (mate or stalemate) is answered `bestmove 0000`, as the Go port does. |
 | `bench [depth]` | The 16 Bratko-Kopec bench positions at depth 13, single-threaded, book off, with the table and eval cache cleared, printing nodes and nps. The node total is the parity signature. |
 | `eval` | The search's full evaluation: draw short-circuit, cache, fifty-move scaling. |
 | `nnue` | The raw network output, unscaled. |
@@ -758,7 +765,7 @@ The version is `MAJOR.MINOR.BUILD`, from git alone, the rule all of reckless-tec
 - `BUILD` is the number of commits since that tag, the tagged commit itself being 0.
 
 `build.rs` works it out (`git describe --tags --match 'v*.*' --exclude 'v*.*.*'`) and the engine reports it:
-`id name Pawnstar 1.0.0`, and in the banner. Nothing in the tree holds a version to edit (`Cargo.toml`'s is a fixed
+`id name Pawnstar 2.3.1`, and in the banner. Nothing in the tree holds a version to edit (`Cargo.toml`'s is a fixed
 `0.0.0` placeholder). A tree with no mark reachable - a source tarball, a shallow clone, a fork without the tags -
 builds as `0.0.0`, with a warning. (No source archive is released: clone or fork the repository for the source.)
 
@@ -860,8 +867,8 @@ holds both.
 ## Performance
 
 The NNUE kernels are scalar only. They are bit-identical to the C++ SIMD kernels by construction, and the C++ also
-runs scalar on arm64, where this port was verified. Measured single-threaded on an Apple M1 Pro (medians over
-alternating runs, with the history of the time):
+runs scalar on arm64, where this port was verified. Measured single-threaded on an Apple M1 Pro in July 2026, on the v12 net and before 2.0.0 (medians over
+alternating runs, with the history of the time; not re-measured since, and the v20 net costs more per node):
 
 | Metric | C++ | Rust | ratio |
 |---|---|---|---|
@@ -872,13 +879,19 @@ alternating runs, with the history of the time):
 Real search speed is within about 10 % of the C++, since the search is bound by the evaluation and the eval kernels
 vectorise.
 
-Head to head at 10+0.1, the Rust port tied the C++ exactly at 150–150 over 300 games (UHO openings,
+On 2026-07-03 (release 1.x, on the v12 net, before 2.0.0; the machine was not recorded), head to head at 10+0.1, the Rust port tied the C++ exactly at 150–150 over 300 games (UHO openings,
 single-threaded): 81 wins each and 138 draws, 0.0 ± 25.1 Elo. A three-way round robin with the Go port put all three
 engines within the error bars of one another (least squares, with C++ = 0: Go +13, Rust −7).
 
 The perft gap is confined to raw move generation (`gen_moves`): per-element bounds checks and indirect attack-function
 calls, which clang folds harder. Move generation is only about 1–2 % of a search node's cost, so it barely registers
 in play.
+
+**Release 2.3.1** (2026-11-09) changed how a search under a hard limit starts (see [Iterative deepening and
+time](#iterative-deepening-and-time)). Measured on reckless-ci-lin-2 on 2026-11-09, at 1+0.01 over 2,000 games
+against 2.3.0: -3.82 Elo (corrected 95% interval -17.86 to +10.22), so no strength change is detectable, with 0
+against 110 unforced no-search moves. Time losses were 72 against 59, within chance. In a sweep of 1,072 node-limited
+cases the Rust and C++ ports agreed in every one. With no hard limit nothing changes, and `bench` stays 5,617,906.
 
 Future work is x86-64 AVX2/VNNI output-dot kernels, using `std::arch` and the ported cpuid gate in `platform.rs`. They
 are untested here for lack of x86 hardware, and any such change must reproduce the bench golden signature exactly.

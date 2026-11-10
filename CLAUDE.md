@@ -116,10 +116,10 @@ Releases publish **no source archive** (Jonny, 2026-10-30: clone or fork for the
 ## The parity contract (the one hard rule)
 
 The whole value of this port is bit-exactness with `../pawnstar`
-(https://github.com/jonny-reckless/pawnstar). `tests/bench_golden_test.rs` locks the signature:
+(https://github.com/reckless-technology/pawnstar). `tests/bench_golden_test.rs` locks the signature:
 bench depth 13, single-threaded = **5,617,906 nodes** with fixed per-position node counts and best
 moves (net **v20**, release 2.0.0; it was 6,601,454 on v12, and `GOLDEN_TOTAL` is the number's one home). The Go
-port (../pawnstar-go) shares the same signature; a 900-game round-robin at 10+0.1 put all three engines within error
+port (../pawnstar-go) shares the same signature; a 900-game round-robin at 10+0.1 (2026-07-03, v12 net) put all three engines within error
 bars (C++ vs Rust: an exact 150–150 tie).
 
 - **Never** replace `sort_moves` with `sort`/`sort_unstable` — the stable descending insertion
