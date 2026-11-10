@@ -16,11 +16,12 @@ and produce bit-identical evaluations from it.
 | `king_bucket_map_crc` | `0x0A20060D4E9586E0` |
 | `bench` signature | **5,617,906** nodes at depth 13, single-threaded (`tests/bench_golden_test.rs`) |
 
-Measured against v12, the net it replaces, on 2026-10-30 on reckless-ci-lin-0 (with reckless-ci-lin-2 playing
-8,000 of the 12,000 games at 12+0.12): **+9.99 Elo (95% +4.33 to +15.66) at 8+0.08** over 8,000 games and
-**+1.13 (-3.17 to +5.43; widened for over-dispersion, -4.90 to +7.16) at 12+0.12** over 12,000 games - a gain at
-the faster time control and level at the slower one, so **non-inferior**, not shown stronger. The 8+0.08 figure
-is biased upward: the run was extended because its first stage looked good. The
+Measured against v12, the net it replaces, on 2026-10-30: **+9.99 Elo (95% +2.42 to +17.57) at 8+0.08** over 8,000
+games on reckless-ci-lin-0 and **+1.13 (95% -5.63 to +7.89) at 12+0.12** over 12,000 games on lin-0 and lin-2 - a
+gain at the faster time control and level at the slower one, so **non-inferior**, not shown stronger. Both
+intervals are corrected for replayed openings (ICC 0.0746, design effect 2.47; the C++ repository's method). The
+8+0.08 one is an estimate, as that arm's game files were never written, and is biased upward: the run was extended
+because its first stage looked good. The
 architecture is the shared shape v12 was already being moved onto; what changed is the training
 data.
 

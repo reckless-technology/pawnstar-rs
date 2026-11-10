@@ -642,11 +642,13 @@ build's constants, so a net stamped by a tool built at another architecture carr
 then refused - the header, never the file name, says what a net is.
 
 The shipped net, **v20** (release 2.0.0), is trained **entirely on Leela Chess Zero self-play data**. Against v12, the net it
-replaces, it measured **+9.99 Elo (95% +4.33 to +15.66) at 8+0.08** over 8,000 games and **+1.13 (-3.17 to +5.43;
-widened for over-dispersion, -4.90 to +7.16) at 12+0.12** over 12,000 games, played on 2026-10-30 on reckless-ci-lin-0,
-with reckless-ci-lin-2 playing 8,000 of the 12,000. So v20 is **non-inferior** to v12, not shown stronger: the
-12+0.12 result cannot separate "nothing" from "a few Elo". The 8+0.08 figure is biased upward, since the run was
-extended because its first stage looked good (that stage alone gave +7.21 ± 7.99). v12 was itself trained on
+replaces, it measured **+9.99 Elo (95% +2.42 to +17.57) at 8+0.08** over 8,000 games on reckless-ci-lin-0 and **+1.13 (95% -5.63 to
++7.89) at 12+0.12** over 12,000 games on reckless-ci-lin-0 and reckless-ci-lin-2, all played on 2026-10-30. The
+intervals are corrected for the openings being replayed (intra-class correlation 0.0746, design effect 2.47, the C++
+repository's method; the 12+0.12 nominal interval is -3.17 to +5.43). The 8+0.08 interval is an estimate, because
+that arm's game files were never written, and the figure is biased upward, since the run was extended because its
+first stage looked good. So v20 is **non-inferior** to v12, not shown stronger: the 12+0.12 result cannot separate
+"nothing" from "a few Elo". v12 was itself trained on
 PlentyChess data and v20 on Leela data alone, so non-inferiority is what let the dependency go.
 
 That training data is the **Leela Chess Zero self-play training data**
