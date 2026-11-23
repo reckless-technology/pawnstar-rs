@@ -36,6 +36,8 @@ jobs:
       # single source of truth instead: GOLDEN_TOTAL in tests/bench_golden_test.rs. It has since been
       # re-blessed again, 6,601,454 -> 5,617,906, when net v20 shipped in release 2.0.0 - and this step
       # needed no edit, which is the arrangement working.
+      - name: Parity checker tests (tools/match_parity.py)
+        run: python3 -m unittest discover -s test -p 'test_*.py'
       - name: Bench determinism signature
         run: |
           want=$(grep -oP 'GOLDEN_TOTAL:\s*u64\s*=\s*\K[0-9_]+' tests/bench_golden_test.rs | tr -d '_')

@@ -101,6 +101,16 @@ pinned in `tools/openings.pin` (repository, commit, path, SHA-256), fetched and 
 the file's 21-line `#` header is stripped by the core, so the pinned file is hashed as it is. Move the pin by changing
 `COMMIT` and `SHA256` together.
 
+**Parity against Pawnstar in CI** (`.github/workflows/parity.yml`, manual, also `workflow_call`): this port and Pawnstar (C++)
+are bit-exact at a fixed depth on one thread, so a depth-8 match between them from the same openings is deterministic. The
+workflow builds both (Pawnstar at the same-named tag if this ref is a tag it has, otherwise its `main`; `pawnstar_ref`
+overrides), plays the match through the same shared workflow as `match.yml`, and then `tools/match_parity.py` reads the
+chunk PGNs and fails unless, for every opening, the two colour-reversed games are identical in moves, in every move's
+score, depth, nodes and seldepth, in result and termination, and the candidate scores exactly 50 %. A divergence is printed
+with its opening and first ply. `gh workflow run parity.yml -R reckless-technology/pawnstar-rs -f ref=main -f games=400
+-f chunks=4`; `-f control=synthetic-net` is the negative control (the candidate plays the synthetic net) and **must** go
+red. Its tests are `python3 -m unittest discover -s test -p 'test_*.py'` (CI runs them). It is not wired to `release.yml`.
+
 **Coverage** (README, "Coverage"): CI's `coverage` job runs every suite under `cargo llvm-cov --release` and fails
 under **90 % of lines**. The figure is the engine library and the `pawnstar` binary - `src/` without `src/bin/`:
 `dump_magics`, `stamp_net` and `write_synthetic_net` are developer tools run by hand and are deliberately excluded
