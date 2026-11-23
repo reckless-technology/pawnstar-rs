@@ -270,7 +270,9 @@ jobs:
           pgns=(chunks/chunk-*.pgn)
           [ "${#pgns[@]}" -gt 0 ] || { echo "::error::no chunk PGNs to check"; exit 1; }
           status=0
-          python3 -I tools/match_parity.py --games "$expect" "${pgns[@]}" 2>&1 | tee parity.txt || status=1
+          # Not through `tee`: without pipefail a pipeline takes tee's status, and the negative control stayed green.
+          python3 -I tools/match_parity.py --games "$expect" "${pgns[@]}" > parity.txt 2>&1 || status=1
+          cat parity.txt
           {
             echo "### Parity assertion (tools/match_parity.py)${CONTROL:+ - control: ${CONTROL}}"
             echo '```'
