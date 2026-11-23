@@ -75,6 +75,32 @@ Visual C++ redistributable; `tools/windows-dependents.ps1` reads the PE import t
 job and the release's Windows build on any other DLL. A RUSTFLAGS in the environment replaces the
 config's flags, so no workflow sets one.
 
+**Strength matches** (`.github/workflows/match.yml`, manual only) run on GitHub-hosted `ubuntu-24.04` runners through the
+organisation's shared match workflow, `reckless-technology/pawnstar`'s `match-core.yml` (that repository's
+`docs/match-core.md` is the caller's guide). The workflow builds a candidate and a baseline with cargo, fetches the pinned
+opening set, writes the manifest (`tools/write_match_manifest.py`) and uploads one artifact; the shared workflow then
+plays the match as disjoint chunks of the opening set and pools them into the run summary (opening-corrected Elo, the
+pentanomial, per-chunk CPU and nps). To run one:
+
+```bash
+gh workflow run match.yml -R reckless-technology/pawnstar-rs \
+  -f candidate_ref=<branch|tag|sha> -f baseline_ref=v2.3.1 -f time_control=8+0.08 -f games=4000 -f chunks=20
+# `depth=8` instead of a time control plays a fixed-depth match; `baseline_time_control` gives time odds;
+# `candidate_net_url` + `candidate_net_sha256` (and the baseline's) play a net other than the one the ref ships.
+gh run watch <id>       # the pooled result is in the run's summary
+```
+
+The baseline defaults to the newest `vMAJOR.MINOR.PATCH` tag. Four things to know: the shared workflow is called at one
+**full commit SHA** (never a branch, since it checks its own `tools/` out at the commit it was called at); the chunk
+count and `games` are capped by the opening set (a match that would replay an opening is refused); a time-control match
+is fair within a chunk but its absolute nps varies with the hosted CPU model (read the per-chunk table), whereas a
+fixed-depth match is deterministic across machines; and the organisation's public repositories share about 60 hosted
+jobs, so keep a trial to a handful of chunks. `tools/match_preflight.py` replaces the core's generic probe: it fails a
+chunk whose engine refused its net or fell back to the embedded one. **The openings** are Pawnstar's `nnue/openings.epd`
+pinned in `tools/openings.pin` (repository, commit, path, SHA-256), fetched and verified by `tools/fetch-openings.sh`;
+the file's 21-line `#` header is stripped by the core, so the pinned file is hashed as it is. Move the pin by changing
+`COMMIT` and `SHA256` together.
+
 **Coverage** (README, "Coverage"): CI's `coverage` job runs every suite under `cargo llvm-cov --release` and fails
 under **90 % of lines**. The figure is the engine library and the `pawnstar` binary - `src/` without `src/bin/`:
 `dump_magics`, `stamp_net` and `write_synthetic_net` are developer tools run by hand and are deliberately excluded

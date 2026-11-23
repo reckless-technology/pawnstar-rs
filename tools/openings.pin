@@ -1,0 +1,10 @@
+# The match opening set, pinned. Plain KEY=value lines: sourced by tools/fetch-openings.sh and
+# readable by a workflow step (grep '^KEY=' tools/openings.pin | cut -d= -f2).
+# The set is Pawnstar's own (the C++ engine's repository, public), at one commit, so a result can name
+# the exact positions it was played from. To move the pin, change COMMIT and SHA256 together
+# (the commit last touching the file is 55f4dce9a387412be6d8555ff61066e1e36ffd83; 6,433 positions, a
+# strict superset of the 6,377-position set before it).
+REPO=reckless-technology/pawnstar
+COMMIT=8f2b081372d52878d051de8c613c184e06e30c44
+PATH_IN_REPO=nnue/openings.epd
+SHA256=560f4e6d8e6805f62738cd618976d70b9f58b65f8be5a19533d36017839ed616
