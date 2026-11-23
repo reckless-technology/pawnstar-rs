@@ -1,0 +1,223 @@
+name: Match
+
+# A strength match between two builds of this engine, played on GitHub-hosted runners through the organisation's
+# shared match workflow (reckless-technology/pawnstar, .github/workflows/match-core.yml; its guide is docs/match-core.md
+# there). Manual only: nothing here runs on a push or a pull request. It replaces the hand-run matches on lin-0, which
+# is the one self-hosted Linux machine and, while a timed match runs on it, makes every private repository unpushable.
+#
+# This file is a CALLER and holds only what is this engine's:
+#
+#   refs   -> resolves the two refs to commits (the baseline defaults to the newest vMAJOR.MINOR.PATCH tag)
+#   build  -> builds both engines with cargo, fetches the pinned opening set (tools/openings.pin), and gathers
+#             the binaries, both nets, the openings and a manifest.json into ONE artifact, `match-inputs`
+#   match  -> the shared workflow: fastchess, the plan, the chunk matrix, the pool. The result is in its job summary.
+#
+# THE SHARED WORKFLOW IS PINNED TO A COMMIT, never a branch: it checks its own tools/ out at the commit it was called
+# at, so the commit below is the whole of the match harness this file ran. To move it, change the one SHA here
+# (pawnstar PR #99 merged it as c0ffab8b).
+#
+# A workflow_dispatch workflow cannot be dispatched until its file is on the default branch, so an edit is tried from
+# its own branch with `gh workflow run match.yml --ref <branch>` once the branch also has a temporary `push` trigger.
+#
+# Capacity: the organisation shares about 60 concurrent hosted jobs across its public repositories, and the shared
+# workflow keeps max-parallel at 40. Keep proof runs to a handful of chunks.
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_ref:
+        description: 'Candidate: branch, tag or commit'
+        default: 'main'
+      baseline_ref:
+        description: 'Baseline: branch, tag or commit (empty = the newest vMAJOR.MINOR.PATCH tag)'
+        default: ''
+      candidate_net_url:
+        description: 'Candidate net URL (empty = the net the candidate ref ships, nnue/pawnstar-v20.bin)'
+        default: ''
+      candidate_net_sha256:
+        description: 'SHA-256 of the candidate net (required with a URL)'
+        default: ''
+      baseline_net_url:
+        description: 'Baseline net URL (empty = the net the baseline ref ships)'
+        default: ''
+      baseline_net_sha256:
+        description: 'SHA-256 of the baseline net (required with a URL)'
+        default: ''
+      time_control:
+        description: 'Time control, e.g. 8+0.08 (ignored when a depth is given)'
+        default: '8+0.08'
+      baseline_time_control:
+        description: 'Time odds: the baseline plays this clock instead (empty = the same clock)'
+        default: ''
+      depth:
+        description: 'Fixed search depth instead of a time control (empty = use the time control)'
+        default: ''
+      games:
+        description: 'Total games (rounded up to whole colour-reversed pairs)'
+        default: '4000'
+      chunks:
+        description: 'Number of chunk jobs'
+        default: '20'
+      concurrency:
+        description: 'Games at once per chunk job'
+        default: '2'
+      hash_mb:
+        description: 'Transposition table per engine, MB (64 is the figure the three ports are bit-exact at)'
+        default: '64'
+      first_opening:
+        description: 'First position of the pinned opening set to play (1-based; the chunks take consecutive slices)'
+        default: '1'
+
+permissions:
+  contents: read
+
+jobs:
+  refs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      candidate_sha: ${{ steps.refs.outputs.candidate_sha }}
+      baseline_sha: ${{ steps.refs.outputs.baseline_sha }}
+      baseline_ref: ${{ steps.refs.outputs.baseline_ref }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Resolve the refs
+        id: refs
+        env:
+          IN_CANDIDATE: ${{ inputs.candidate_ref || 'main' }}
+          IN_BASELINE: ${{ inputs.baseline_ref }}
+        run: |
+          python3 - <<'PY'
+          import os, subprocess
+
+          def sh(*args):
+              return subprocess.run(args, check=True, capture_output=True, text=True).stdout.strip()
+
+          env = os.environ
+          # Resolved to commits here, once, so every job builds exactly what this named.
+          sh("git", "fetch", "--tags", "--force", "origin", "+refs/heads/*:refs/remotes/origin/*")
+          def resolve(ref):
+              for candidate in (ref, "origin/" + ref):
+                  try:
+                      return sh("git", "rev-parse", "--verify", candidate + "^{commit}")
+                  except subprocess.CalledProcessError:
+                      continue
+              raise SystemExit(f"::error::cannot resolve '{ref}'")
+          baseline = env["IN_BASELINE"].strip()
+          if not baseline:
+              tags = sh("git", "tag", "--list", "v[0-9]*.[0-9]*.[0-9]*", "--sort=-v:refname").splitlines()
+              baseline = tags[0]
+          candidate_sha, baseline_sha = resolve(env["IN_CANDIDATE"]), resolve(baseline)
+          print(f"candidate {env['IN_CANDIDATE']} = {candidate_sha}")
+          print(f"baseline  {baseline} = {baseline_sha}")
+          with open(env["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"candidate_sha={candidate_sha}\nbaseline_sha={baseline_sha}\nbaseline_ref={baseline}\n")
+          PY
+
+  build:
+    needs: refs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: The workflow's own tree (the tools and the opening pin)
+        uses: actions/checkout@v5
+        with:
+          path: wf
+      - name: Candidate checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.refs.outputs.candidate_sha }}
+          fetch-depth: 0 # the tags and the history: build.rs derives the version from them
+          path: candidate-src
+      - name: Baseline checkout
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.refs.outputs.baseline_sha }}
+          fetch-depth: 0
+          path: baseline-src
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Check runner has AVX2 + BMI2
+        run: |
+          grep -q avx2 /proc/cpuinfo && grep -q bmi2 /proc/cpuinfo \
+            || { echo "::error::runner CPU lacks AVX2/BMI2: cannot run the engine"; exit 1; }
+      - name: Build the candidate
+        run: cd candidate-src && cargo build --release --locked --bin pawnstar
+      - name: Build the baseline
+        run: cd baseline-src && cargo build --release --locked --bin pawnstar
+      - name: Gather the match inputs and write the manifest
+        env:
+          CANDIDATE_URL: ${{ inputs.candidate_net_url }}
+          CANDIDATE_SHA256: ${{ inputs.candidate_net_sha256 }}
+          BASELINE_URL: ${{ inputs.baseline_net_url }}
+          BASELINE_SHA256: ${{ inputs.baseline_net_sha256 }}
+          CANDIDATE_COMMIT: ${{ needs.refs.outputs.candidate_sha }}
+          BASELINE_COMMIT: ${{ needs.refs.outputs.baseline_sha }}
+          BASELINE_REF: ${{ needs.refs.outputs.baseline_ref }}
+        run: |
+          set -euo pipefail
+          mkdir -p inputs/candidate inputs/baseline
+          cp candidate-src/target/release/pawnstar inputs/candidate/pawnstar
+          cp baseline-src/target/release/pawnstar inputs/baseline/pawnstar
+          # The pinned opening set, fetched and SHA-256 checked (the core checks it again against the manifest).
+          cp "$(OPENINGS_CACHE="$RUNNER_TEMP/openings" wf/tools/fetch-openings.sh)" inputs/openings.epd
+
+          fetch_net() {   # <name> <url> <sha256> <the net the ref ships>
+            if [ -n "$2" ]; then
+              [ -n "$3" ] || { echo "::error::$1 net URL given without a SHA-256"; exit 1; }
+              curl -fsSL --retry 3 -o "inputs/$1.bin" "$2"
+              echo "$3  inputs/$1.bin" | sha256sum -c - || { echo "::error::$1 net does not match the SHA-256 given"; exit 1; }
+            else
+              [ -f "$4" ] || { echo "::error::$1 ref has no $4: give its net with a URL and a SHA-256"; exit 1; }
+              cp "$4" "inputs/$1.bin"
+            fi
+          }
+          fetch_net candidate "$CANDIDATE_URL" "$CANDIDATE_SHA256" candidate-src/nnue/pawnstar-v20.bin
+          fetch_net baseline  "$BASELINE_URL"  "$BASELINE_SHA256"  baseline-src/nnue/pawnstar-v20.bin
+          chmod +x inputs/*/pawnstar
+          cp wf/tools/match_preflight.py inputs/match_preflight.py
+
+          python3 wf/tools/write_match_manifest.py inputs \
+            --candidate-name "candidate ${CANDIDATE_COMMIT:0:8}" \
+            --baseline-name "${BASELINE_REF} ${BASELINE_COMMIT:0:8}" \
+            --note "candidate commit ${CANDIDATE_COMMIT}" \
+            --note "baseline ${BASELINE_REF} commit ${BASELINE_COMMIT}" \
+            --note "workflow commit ${{ github.sha }}"
+          {
+            echo "candidate_commit  $CANDIDATE_COMMIT"
+            echo "baseline_commit   $BASELINE_COMMIT ($BASELINE_REF)"
+            echo "workflow_commit   ${{ github.sha }}"
+            (cd inputs && sha256sum candidate.bin baseline.bin openings.epd candidate/pawnstar baseline/pawnstar)
+          } | tee inputs/manifest.txt
+          {
+            echo '### Match inputs'
+            echo '```'
+            cat inputs/manifest.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: match-inputs
+          path: inputs
+          retention-days: 14
+          if-no-files-found: error
+
+  match:
+    needs: [refs, build]
+    # Pinned to a COMMIT: the core checks its tools out at the commit it was called at.
+    uses: reckless-technology/pawnstar/.github/workflows/match-core.yml@c0ffab8bd8ed60369a9e819b9475b4a63e6157d4
+    with:
+      artifact: match-inputs
+      title: 'Match: ${{ needs.refs.outputs.candidate_sha }} (candidate) vs ${{ needs.refs.outputs.baseline_ref }} ${{ needs.refs.outputs.baseline_sha }} (baseline)'
+      time_control: ${{ inputs.time_control || '8+0.08' }}
+      baseline_time_control: ${{ inputs.baseline_time_control }}
+      depth: ${{ inputs.depth }}
+      games: ${{ inputs.games || '4000' }}
+      chunks: ${{ inputs.chunks || '20' }}
+      concurrency: ${{ inputs.concurrency || '2' }}
+      hash_mb: ${{ inputs.hash_mb || '64' }}
+      first_opening: ${{ inputs.first_opening || '1' }}
+      # This engine's own protection, which the generic start-and-search probe cannot give: each side started with
+      # its net as the environment and the option, and refused if it reports a refused or substituted net.
+      preflight: python3 -I match_preflight.py "$MATCH_INPUTS"
