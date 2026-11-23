@@ -1,0 +1,282 @@
+name: Parity
+
+# The fixed-depth parity check against Pawnstar (C++), on GitHub-hosted runners. This port is bit-exact with the C++
+# engine at a fixed depth on one thread (the same bench signature, 5,617,906 nodes at depth 13 with net v20), so a
+# fixed-depth match between the two from the same openings is DETERMINISTIC: each colour-reversed pair must be the same
+# game move for move, and the score exactly 50 %. This workflow plays that match through the organisation's shared
+# match workflow and then asserts it, opening by opening (tools/match_parity.py). It replaces the hand-run checks on
+# lin-0 (`tools/build-all.sh`, `replay.py` and the `sweep_*.py` scripts in a working directory no repository held).
+# Manual only, and callable from another workflow (`workflow_call`), which is how a release can run it; release.yml
+# does not yet.
+#
+#   refs   -> resolves this repository's ref and Pawnstar's ref to commits. An empty Pawnstar ref is "the paired
+#             release": the tag of the same name when this ref is a tag Pawnstar also has, otherwise Pawnstar's main
+#   build  -> builds this port (cargo) and Pawnstar (make, clang-18) and gathers both binaries, both nets, the
+#             pinned openings and a manifest.json into ONE artifact, `parity-inputs`
+#   match  -> the shared workflow (match-core.yml), pinned to a commit, at a fixed depth
+#   parity -> reads the chunks' PGNs and fails unless every pair is identical
+#
+# THE NEGATIVE CONTROL. `control: synthetic-net` makes the candidate play the shared shape's synthetic net (the
+# one tools/new-shape-signature.sh uses) while Pawnstar plays net v20: the two engines then search different trees,
+# and the parity job MUST fail. A run that stays green with it set means the assertion is not looking.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'This repository: branch, tag or commit'
+        default: 'main'
+      pawnstar_ref:
+        description: 'Pawnstar (C++): branch, tag or commit (empty = the tag of the same name as the ref above if there is one, else main)'
+        default: ''
+      depth:
+        description: 'Fixed search depth'
+        default: '8'
+      games:
+        description: 'Total games (rounded up to whole colour-reversed pairs)'
+        default: '400'
+      chunks:
+        description: 'Number of chunk jobs'
+        default: '4'
+      concurrency:
+        description: 'Games at once per chunk job'
+        default: '2'
+      first_opening:
+        description: 'First position of the pinned opening set to play (1-based)'
+        default: '1'
+      control:
+        description: 'none, or synthetic-net: a negative control that must make the parity job fail'
+        default: 'none'
+  workflow_call:
+    inputs:
+      ref:
+        type: string
+        default: 'main'
+      pawnstar_ref:
+        type: string
+        default: ''
+      depth:
+        type: string
+        default: '8'
+      games:
+        type: string
+        default: '400'
+      chunks:
+        type: string
+        default: '4'
+      concurrency:
+        type: string
+        default: '2'
+      first_opening:
+        type: string
+        default: '1'
+      control:
+        type: string
+        default: 'none'
+
+permissions:
+  contents: read
+
+jobs:
+  refs:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    outputs:
+      port_sha: ${{ steps.refs.outputs.port_sha }}
+      pawnstar_sha: ${{ steps.refs.outputs.pawnstar_sha }}
+      pawnstar_ref: ${{ steps.refs.outputs.pawnstar_ref }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Resolve the refs
+        id: refs
+        env:
+          IN_REF: ${{ inputs.ref || 'main' }}
+          IN_PAWNSTAR: ${{ inputs.pawnstar_ref }}
+        run: |
+          python3 - <<'PY'
+          import os, re, subprocess
+
+          def sh(*args):
+              return subprocess.run(args, check=True, capture_output=True, text=True).stdout.strip()
+
+          env = os.environ
+          sh("git", "fetch", "--tags", "--force", "origin", "+refs/heads/*:refs/remotes/origin/*")
+          def resolve(ref):
+              for candidate in (ref, "origin/" + ref):
+                  try:
+                      return sh("git", "rev-parse", "--verify", candidate + "^{commit}")
+                  except subprocess.CalledProcessError:
+                      continue
+              raise SystemExit(f"::error::cannot resolve '{ref}' in this repository")
+          port_ref = env["IN_REF"].strip()
+          port_sha = resolve(port_ref)
+
+          pawnstar = "https://github.com/reckless-technology/pawnstar.git"
+          def remote(ref):
+              """Pawnstar's commit for a branch or tag (a tag's own commit), or None. A full SHA is taken as it is."""
+              if re.fullmatch(r"[0-9a-f]{40}", ref):
+                  return ref
+              lines = sh("git", "ls-remote", pawnstar, f"refs/heads/{ref}", f"refs/tags/{ref}", f"refs/tags/{ref}^{{}}")
+              found = {}
+              for line in lines.splitlines():
+                  sha, name = line.split("\t")
+                  found[name] = sha
+              for name in (f"refs/tags/{ref}^{{}}", f"refs/tags/{ref}", f"refs/heads/{ref}"):
+                  if name in found:
+                      return found[name]
+              return None
+          wanted = env["IN_PAWNSTAR"].strip()
+          if not wanted:
+              is_tag = subprocess.run(["git", "rev-parse", "--verify", "-q", f"refs/tags/{port_ref}"],
+                                      capture_output=True).returncode == 0
+              wanted = port_ref if is_tag and remote(port_ref) else "main"
+          pawnstar_sha = remote(wanted)
+          if not pawnstar_sha:
+              raise SystemExit(f"::error::cannot resolve '{wanted}' in reckless-technology/pawnstar")
+          print(f"port      {port_ref} = {port_sha}")
+          print(f"pawnstar  {wanted} = {pawnstar_sha}")
+          with open(env["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"port_sha={port_sha}\npawnstar_sha={pawnstar_sha}\npawnstar_ref={wanted}\n")
+          PY
+
+  build:
+    needs: refs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: The workflow's own tree (the tools and the opening pin)
+        uses: actions/checkout@v5
+        with:
+          path: wf
+      - name: This port
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.refs.outputs.port_sha }}
+          fetch-depth: 0 # the tags and the history: build.rs derives the version from them
+          path: port-src
+      - name: Pawnstar (C++)
+        uses: actions/checkout@v5
+        with:
+          repository: reckless-technology/pawnstar
+          ref: ${{ needs.refs.outputs.pawnstar_sha }}
+          fetch-depth: 0
+          path: pawnstar-src
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install the C++ toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang-18 cmake ninja-build
+      - name: Check runner has AVX2 + BMI2
+        run: |
+          grep -q avx2 /proc/cpuinfo && grep -q bmi2 /proc/cpuinfo \
+            || { echo "::error::runner CPU lacks AVX2/BMI2: cannot run the engine"; exit 1; }
+      - name: Build this port
+        run: cd port-src && cargo build --release --locked --bins
+      - name: Build Pawnstar
+        run: cd pawnstar-src && make -j"$(nproc)" RELEASE=1 CXX=clang++-18
+      - name: Gather the match inputs and write the manifest
+        env:
+          CONTROL: ${{ inputs.control }}
+          PORT_COMMIT: ${{ needs.refs.outputs.port_sha }}
+          PAWNSTAR_COMMIT: ${{ needs.refs.outputs.pawnstar_sha }}
+          PAWNSTAR_REF: ${{ needs.refs.outputs.pawnstar_ref }}
+        run: |
+          set -euo pipefail
+          mkdir -p inputs/candidate inputs/baseline
+          cp port-src/target/release/pawnstar inputs/candidate/pawnstar
+          cp pawnstar-src/build/pawnstar inputs/baseline/pawnstar
+          chmod +x inputs/*/pawnstar
+          cp "$(OPENINGS_CACHE="$RUNNER_TEMP/openings" wf/tools/fetch-openings.sh)" inputs/openings.epd
+          cp wf/tools/match_preflight.py inputs/match_preflight.py
+
+          cp pawnstar-src/nnue/pawnstar-v20.bin inputs/baseline.bin
+          case "${CONTROL:-none}" in
+            none)
+              cp port-src/nnue/pawnstar-v20.bin inputs/candidate.bin
+              # The parity claim is "the same net". Two different nets would make the match a strength test that is
+              # allowed to differ, so refuse here with the reason, not later with a divergence.
+              cmp -s inputs/candidate.bin inputs/baseline.bin \
+                || { echo "::error::the two repositories ship different nets (candidate $(sha256sum < inputs/candidate.bin | cut -c1-12), Pawnstar $(sha256sum < inputs/baseline.bin | cut -c1-12)): bit-exact parity is only claimed on the same net"; exit 1; } ;;
+            synthetic-net)
+              port-src/target/release/write_synthetic_net inputs/candidate.bin
+              echo "::warning::negative control: the candidate plays the synthetic net, so the parity job is EXPECTED to fail" ;;
+            *) echo "::error::control must be none or synthetic-net, not $CONTROL"; exit 1 ;;
+          esac
+
+          python3 wf/tools/write_match_manifest.py inputs \
+            --candidate-name "pawnstar-rs ${PORT_COMMIT:0:8}" \
+            --baseline-name "Pawnstar ${PAWNSTAR_REF} ${PAWNSTAR_COMMIT:0:8}" \
+            --note "pawnstar-rs commit ${PORT_COMMIT}" \
+            --note "Pawnstar (C++) ${PAWNSTAR_REF} commit ${PAWNSTAR_COMMIT}" \
+            --note "negative control: ${CONTROL:-none}" \
+            --note "workflow commit ${{ github.sha }}"
+          {
+            echo "port_commit      $PORT_COMMIT"
+            echo "pawnstar_commit  $PAWNSTAR_COMMIT ($PAWNSTAR_REF)"
+            echo "control          ${CONTROL:-none}"
+            echo "workflow_commit  ${{ github.sha }}"
+            (cd inputs && sha256sum candidate.bin baseline.bin openings.epd candidate/pawnstar baseline/pawnstar)
+          } | tee inputs/manifest.txt
+          {
+            echo '### Parity inputs'
+            echo '```'
+            cat inputs/manifest.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v5
+        with:
+          name: parity-inputs
+          path: inputs
+          retention-days: 14
+          if-no-files-found: error
+
+  match:
+    needs: [refs, build]
+    # Pinned to a COMMIT: the core checks its tools out at the commit it was called at.
+    uses: reckless-technology/pawnstar/.github/workflows/match-core.yml@c0ffab8bd8ed60369a9e819b9475b4a63e6157d4
+    with:
+      artifact: parity-inputs
+      tag: parity
+      title: 'Parity at depth ${{ inputs.depth || 8 }}: pawnstar-rs ${{ needs.refs.outputs.port_sha }} (candidate) vs Pawnstar ${{ needs.refs.outputs.pawnstar_ref }} ${{ needs.refs.outputs.pawnstar_sha }} (baseline)'
+      depth: ${{ inputs.depth || '8' }}
+      games: ${{ inputs.games || '400' }}
+      chunks: ${{ inputs.chunks || '4' }}
+      concurrency: ${{ inputs.concurrency || '2' }}
+      first_opening: ${{ inputs.first_opening || '1' }}
+      hash_mb: '64'
+      preflight: python3 -I match_preflight.py "$MATCH_INPUTS"
+
+  # After the core's pool, on the chunks' own PGNs. It runs even when the pool step failed, so a divergence is
+  # reported as a divergence, and not only as the pool's complaint about it.
+  parity:
+    needs: [build, match]
+    if: ${{ !cancelled() && needs.build.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: parity-chunk-*
+          merge-multiple: true
+          path: chunks
+      - name: Every colour-reversed pair is the same game, and the score is exactly 50 %
+        env:
+          GAMES: ${{ inputs.games || '400' }}
+          CONTROL: ${{ inputs.control }}
+        run: |
+          expect=$(( (GAMES + 1) / 2 * 2 ))
+          shopt -s nullglob
+          pgns=(chunks/chunk-*.pgn)
+          [ "${#pgns[@]}" -gt 0 ] || { echo "::error::no chunk PGNs to check"; exit 1; }
+          status=0
+          # Not through `tee`: without pipefail a pipeline takes tee's status, and the negative control stayed green.
+          python3 -I tools/match_parity.py --games "$expect" "${pgns[@]}" > parity.txt 2>&1 || status=1
+          cat parity.txt
+          {
+            echo "### Parity assertion (tools/match_parity.py)${CONTROL:+ - control: ${CONTROL}}"
+            echo '```'
+            cat parity.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
